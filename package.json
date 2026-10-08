@@ -1,0 +1,33 @@
+{
+  "name": "squarepilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Binance Square trending bot — perspective-first, human-approved",
+  "scripts": {
+    "dry-run": "tsx src/scripts/dry-run.ts",
+    "db:init": "tsx src/scripts/db-init.ts",
+    "lint": "eslint src tests",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.62.1",
+    "satori": "^0.33.5",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^2.0.0"
+  }
+}
