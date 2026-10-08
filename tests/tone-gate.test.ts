@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LlmClient } from '../src/llm/client.js';
 import { checkMechanical, runToneGate } from '../src/compose/tone-gate.js';
 import type { VoiceAssets } from '../src/compose/prompt-assets.js';
+import type { AnchorAssignment } from '../src/compose/anchor.js';
 
 const assets: VoiceAssets = {
   aboutMe: 'x'.repeat(300),
@@ -44,6 +45,20 @@ function llmReturning(text: string): { client: LlmClient; fetchMock: ReturnType<
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+/** The user message the judge received on the first call. */
+function judgePrompt(fetchMock: ReturnType<typeof vi.fn>): string {
+  const init = fetchMock.mock.calls[0]![1] as RequestInit;
+  const body = JSON.parse(String(init.body)) as { messages: { role: string; content: string }[] };
+  return body.messages.find((m) => m.role === 'user')!.content;
+}
+
+const DERIVED: AnchorAssignment = {
+  tier: 'derived',
+  ref: null,
+  material: ['Read the 10 posts showing under #X on Square.'],
+  mayNameJob: true,
+};
 
 describe('checkMechanical', () => {
   it('finds banned phrases regardless of case', () => {
@@ -139,5 +154,33 @@ describe('runToneGate', () => {
   it('does not pass when the model says pass but still lists violations', async () => {
     const { client } = llmReturning('{"pass":true,"violations":["E4 - banned phrase"]}');
     expect((await runToneGate(CLEAN, { llm: client, assets })).ok).toBe(false);
+  });
+
+  it('tells the judge which anchor the post was given', async () => {
+    const { client, fetchMock } = llmReturning('{"pass":true,"violations":[]}');
+    await runToneGate(CLEAN, { llm: client, assets, anchor: DERIVED });
+
+    const prompt = judgePrompt(fetchMock);
+    expect(prompt).toMatch(/Anchor assigned to this post/);
+    expect(prompt).toContain('Read the 10 posts showing under #X on Square.');
+  });
+
+  it('asks the judge to report any first-person claim the material does not support', async () => {
+    // The exit the E5/cap squeeze leaves open is an invented "I checked this
+    // morning". The judge is the only gate that reads for it.
+    const { client, fetchMock } = llmReturning('{"pass":true,"violations":[]}');
+    await runToneGate(CLEAN, { llm: client, assets, anchor: DERIVED });
+
+    expect(judgePrompt(fetchMock)).toMatch(/E5 - fabricated/);
+  });
+
+  it('accepts a stated position as the anchor when that is what was assigned', async () => {
+    const { client, fetchMock } = llmReturning('{"pass":true,"violations":[]}');
+    const stance: AnchorAssignment = { tier: 'stance', ref: null, material: [], mayNameJob: false };
+    await runToneGate(CLEAN, { llm: client, assets, anchor: stance });
+
+    const prompt = judgePrompt(fetchMock);
+    expect(prompt).toMatch(/stated position satisfies E5/);
+    expect(prompt).toMatch(/must not name the author's job/);
   });
 });

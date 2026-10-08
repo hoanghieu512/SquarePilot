@@ -1,5 +1,3 @@
-import type Database from 'better-sqlite3';
-
 /**
  * Phrases that name the author's day job outright.
  *
@@ -11,23 +9,37 @@ import type Database from 'better-sqlite3';
  * Word boundaries matter: a plain substring match on `QA` also fires on
  * "quality", which is a word this account uses constantly and legitimately.
  */
-export const PERSONA_PATTERNS: RegExp[] = [
-  /\bQA\b/i,
-  /\bQA engineer\b/i,
-  /\btester\b/i,
-  /\btesters\b/i,
-  /\bkiểm thử\b/i,
-  /\btest case\b/i,
-  /\bdân test\b/i,
-  /\blàm test\b/i,
-  /\b8 năm\b/i,
-  /\btám năm\b/i,
-  /\bnghề của mình\b/i,
-  /\beight years\b/i,
-  /\bmy day job\b/i,
-  /\bwhere I work\b/i,
-  /\bfor a living\b/i,
+export const PERSONA_PHRASES: string[] = [
+  'QA',
+  'QA engineer',
+  'tester',
+  'kiểm thử',
+  'test case',
+  'dân test',
+  'làm test',
+  '8 năm',
+  'tám năm',
+  'nghề của mình',
+  'testers',
+  'eight years',
+  '8 years',
+  'my day job',
+  'where I work',
+  'for a living',
 ];
+
+/**
+ * Boundaries are Unicode letters and digits, the same rule the X pipeline
+ * uses. JS `\b` only knows ASCII, so `\bkiểm thử\b` could never match: the
+ * boundary after "ử" does not exist as far as `\b` is concerned.
+ */
+const PERSONA_RES = PERSONA_PHRASES.map((phrase) => ({
+  phrase,
+  re: new RegExp(
+    `(?<![\\p{L}\\p{N}])${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`,
+    'iu',
+  ),
+}));
 
 /**
  * At most one post in ten may name the job. Counted per platform: X and Square
@@ -47,8 +59,8 @@ export interface PersonaCheck {
 
 export function detectPersona(text: string): PersonaCheck {
   const matched: string[] = [];
-  for (const pattern of PERSONA_PATTERNS) {
-    const m = text.match(pattern);
+  for (const { re } of PERSONA_RES) {
+    const m = text.match(re);
     if (m) matched.push(m[0]);
   }
   return { mentionsPersona: matched.length > 0, matched };
@@ -59,6 +71,14 @@ export interface PersonaVerdict {
   reason?: string;
   /** How many of the recent posts already name the job. */
   recentCount: number;
+}
+
+/** True when the window already holds as many job mentions as the cap allows. */
+export function personaCapInUse(recentPosts: string[]): boolean {
+  const count = recentPosts
+    .slice(0, PERSONA_CAP_WINDOW)
+    .filter((p) => detectPersona(p).mentionsPersona).length;
+  return count >= PERSONA_CAP_MAX;
 }
 
 /**
@@ -95,12 +115,4 @@ export function checkPersona(draft: string, recentPosts: string[]): PersonaVerdi
   }
 
   return { ok: true, recentCount };
-}
-
-/** Bodies of the most recently published posts, newest first. */
-export function recentPostBodies(db: Database.Database, limit = PERSONA_CAP_WINDOW): string[] {
-  const rows = db
-    .prepare('SELECT content_snapshot FROM posts ORDER BY published_at DESC LIMIT ?')
-    .all(limit) as { content_snapshot: string }[];
-  return rows.map((r) => r.content_snapshot);
 }

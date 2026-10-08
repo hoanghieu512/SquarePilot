@@ -1,11 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
-import { runMigrations } from '../src/database/migrations.js';
+import { describe, expect, it } from 'vitest';
 import {
   PERSONA_CAP_WINDOW,
   checkPersona,
   detectPersona,
-  recentPostBodies,
+  personaCapInUse,
 } from '../src/compose/persona-guard.js';
 
 const NAMES_JOB = "I've been a QA for eight years, and this looks familiar.";
@@ -20,6 +18,18 @@ describe('detectPersona', () => {
   it('catches the Vietnamese forms', () => {
     expect(detectPersona('Mình làm QA 8 năm rồi.').mentionsPersona).toBe(true);
     expect(detectPersona('Nghề của mình là kiểm thử.').mentionsPersona).toBe(true);
+  });
+
+  it('catches a phrase that ends in an accented letter', () => {
+    // JS `\b` only knows ASCII word characters, so a boundary after "ử" never
+    // matched. The sentence above passed only because "nghề của mình" fired.
+    expect(detectPersona('Hồi đó mình làm kiểm thử.').matched).toContain('kiểm thử');
+  });
+
+  it('catches the year count written as a digit in English', () => {
+    // Draft #1 (2026-09-30) said "I've spent 8 years watching systems" and was
+    // caught only because the same paragraph also said "QA".
+    expect(detectPersona("I've spent 8 years watching systems fail.").mentionsPersona).toBe(true);
   });
 
   it('lets reasoning that shows the job through, without naming it', () => {
@@ -79,45 +89,13 @@ describe('checkPersona', () => {
   });
 });
 
-describe('recentPostBodies', () => {
-  let db: Database.Database;
-
-  beforeEach(() => {
-    db = new Database(':memory:');
-    db.pragma('foreign_keys = ON');
-    runMigrations(db);
-    db.prepare(
-      `INSERT INTO trends (hashtag, rank, view_count, content_count, collected_at)
-       VALUES ('#T', 1, 9999, 10, '2026-09-30T00:00:00Z')`,
-    ).run();
-    db.prepare(
-      `INSERT INTO selections (trend_id, outcome, created_at) VALUES (1, 'lens', '2026-09-30T00:00:00Z')`,
-    ).run();
-    db.prepare(
-      `INSERT INTO drafts (selection_id, body, nfc_len, nfd_len, model_used, created_at)
-       VALUES (1, 'b', 1, 1, 'm', '2026-09-30T00:00:00Z')`,
-    ).run();
-  });
-  afterEach(() => db.close());
-
-  it('returns published bodies newest first', () => {
-    const insert = db.prepare(
-      `INSERT INTO posts (draft_id, content_snapshot, hashtag, published_at) VALUES (1, ?, '#T', ?)`,
-    );
-    insert.run('older', '2026-09-01T00:00:00Z');
-    insert.run('newer', '2026-09-20T00:00:00Z');
-
-    expect(recentPostBodies(db)).toEqual(['newer', 'older']);
+describe('personaCapInUse', () => {
+  it('is in use once a post inside the window named the job', () => {
+    expect(personaCapInUse([SHOWS_JOB, NAMES_JOB])).toBe(true);
   });
 
-  it('honours the window size', () => {
-    const insert = db.prepare(
-      `INSERT INTO posts (draft_id, content_snapshot, hashtag, published_at) VALUES (1, ?, '#T', ?)`,
-    );
-    for (let i = 0; i < 14; i++) {
-      insert.run(`post-${i}`, `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`);
-    }
-
-    expect(recentPostBodies(db)).toHaveLength(PERSONA_CAP_WINDOW);
+  it('is free when no post in the window did', () => {
+    expect(personaCapInUse([SHOWS_JOB, SHOWS_JOB])).toBe(false);
+    expect(personaCapInUse([...Array(10).fill(SHOWS_JOB), NAMES_JOB])).toBe(false);
   });
 });

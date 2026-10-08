@@ -144,6 +144,21 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_llm_calls_model ON llm_calls(model);
     `,
   },
+  {
+    version: 2,
+    name: 'draft_anchor_and_attempts',
+    sql: `
+      -- Which Rule E5 tier the pipeline assigned, so the derived quota can be
+      -- counted and a week of runs shows where the anchor ladder lands.
+      ALTER TABLE drafts ADD COLUMN anchor_tier TEXT
+        CHECK (anchor_tier IN ('raw','bank','derived','stance'));
+      ALTER TABLE drafts ADD COLUMN anchor_ref TEXT;
+      -- tone_gate kept only the last attempt's tone result. Persona failing,
+      -- then E5 failing on the rewrite, then persona again left no trace.
+      ALTER TABLE drafts ADD COLUMN persona_gate TEXT;
+      ALTER TABLE drafts ADD COLUMN attempts_json TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

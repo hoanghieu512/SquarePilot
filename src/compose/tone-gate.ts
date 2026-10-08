@@ -1,5 +1,6 @@
 import type { LlmClient, Tier } from '../llm/client.js';
 import type { VoiceAssets } from './prompt-assets.js';
+import { anchorBrief, type AnchorAssignment } from './anchor.js';
 
 /**
  * Phrases banned outright by Rule E4. Checked in code before spending a call.
@@ -141,6 +142,8 @@ export interface ToneGateOptions {
   assets: VoiceAssets;
   tier?: Tier;
   draftId?: number;
+  /** The anchor the drafter was given. Without it E5 is judged from the rules alone. */
+  anchor?: AnchorAssignment;
 }
 
 /**
@@ -162,7 +165,10 @@ export async function runToneGate(draft: string, opts: ToneGateOptions): Promise
     draftId: opts.draftId,
     temperature: 0,
     system: JUDGE_SYSTEM,
-    user: `## Rules\n\n${opts.assets.antiAiRules}\n\n## Post to check\n\n${draft}`,
+    user:
+      `## Rules\n\n${opts.assets.antiAiRules}\n\n` +
+      (opts.anchor ? `${anchorBrief(opts.anchor)}\n\n` : '') +
+      `## Post to check\n\n${draft}`,
   });
 
   const parsed = parseJudge(result.text);

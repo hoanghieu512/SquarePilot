@@ -11,8 +11,11 @@ import type { SelectionResult } from './perspective/types.js';
 import { recentModes, selectMode, type ModeChoice } from './compose/modes.js';
 import { runDataGate, type DataGateResult, type VisualSchema } from './compose/data-gate.js';
 import { loadVoiceAssets } from './compose/prompt-assets.js';
-import { composeDraft, recordDraft, type ComposeOutcome } from './compose/compose-draft.js';
-import { recentPostBodies } from './compose/persona-guard.js';
+import { composeDraft, recentAnchorTiers, recordDraft, type ComposeOutcome } from './compose/compose-draft.js';
+import { readRecentPosts } from './compose/recent-posts.js';
+import { personaCapInUse } from './compose/persona-guard.js';
+import { pipelineFactsFor, resolveAnchor } from './compose/anchor.js';
+import { readAnchorBank } from './perspective/anchor-bank.js';
 import type { LlmClient } from './llm/client.js';
 import { renderToFile, type RenderResult } from './visual/render.js';
 import { createLogger } from './utils/logger.js';
@@ -132,15 +135,36 @@ export async function runUpToDraft(
   // the next pass with no deploy.
   const assets = loadVoiceAssets(config.contentCreatorDir);
 
+  // One account, two pipelines: the hand-written posts in the vault count
+  // toward the persona cap and the shape comparison exactly like this bot's own.
+  const history = readRecentPosts(db, path.join(config.vaultDir, 'outputs', 'square'));
+
+  // Rule E5's anchor is chosen here, not by the drafter. See `resolveAnchor`.
+  const perspective = selection.perspective;
+  const anchor = resolveAnchor({
+    perspective,
+    rawNotes: perspective.kind === 'lens' ? (options.authorNotes?.[perspective.ref] ?? []) : [],
+    bank: readAnchorBank(config.vaultDir),
+    pipelineFacts: pipelineFactsFor(chosen.trend, chosen.topPosts),
+    recentTiers: recentAnchorTiers(db),
+    personaCapInUse: personaCapInUse(history.map((p) => p.personaText)),
+    now: new Date(),
+  });
+  logger.info(
+    `Anchor: ${anchor.tier}${anchor.ref ? ` (${anchor.ref})` : ''}` +
+      (anchor.mayNameJob ? '' : ', job mention not allowed (cap in use)'),
+  );
+
   const draft = await composeDraft(
     {
       trend: chosen.trend,
-      perspective: selection.perspective,
+      perspective,
       mode: chosen.mode!.spec,
       topPosts: chosen.topPosts,
       assets,
+      anchor,
     },
-    { llm: options.llm, recentPosts: recentPostBodies(db) },
+    { llm: options.llm, recent: history },
   );
 
   const draftId = recordDraft(db, chosen.selectionId, draft);

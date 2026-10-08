@@ -6,6 +6,8 @@ import { buildPrompt } from '../src/compose/drafter.js';
 import type { VoiceAssets } from '../src/compose/prompt-assets.js';
 import type { Trend } from '../src/collect/parse-trends.js';
 import type { Perspective } from '../src/perspective/types.js';
+import type { RecentPost } from '../src/compose/recent-posts.js';
+import type { AnchorAssignment } from '../src/compose/anchor.js';
 
 const assets: VoiceAssets = {
   aboutMe: 'ABOUT-ME-MARKER '.repeat(20),
@@ -43,6 +45,14 @@ const GOOD = [
 ].join('\n');
 
 function queueLlm(replies: string[]): { client: LlmClient; calls: () => number } {
+  const { client, fetchMock } = queueLlmWithMock(replies);
+  return { client, calls: () => fetchMock.mock.calls.length };
+}
+
+function queueLlmWithMock(replies: string[]): {
+  client: LlmClient;
+  fetchMock: ReturnType<typeof vi.fn>;
+} {
   let i = 0;
   const fetchMock = vi.fn(async () => {
     const body = replies[Math.min(i, replies.length - 1)]!;
@@ -64,11 +74,22 @@ function queueLlm(replies: string[]): { client: LlmClient; calls: () => number }
       maxAttempts: 1,
       sleep: async () => {},
     }),
-    calls: () => fetchMock.mock.calls.length,
+    fetchMock,
   };
 }
 
 const PASS = '{"pass":true,"violations":[]}';
+
+function recentPost(text: string): RecentPost {
+  return { source: 'db', ref: '1', date: '2026-10-01', shapeText: text, personaText: text };
+}
+
+const DERIVED: AnchorAssignment = {
+  tier: 'derived',
+  ref: null,
+  material: ['Read the 10 posts showing under #USJoblessClaimsFallTo206000 on Square.'],
+  mayNameJob: true,
+};
 
 function req(over: Partial<Parameters<typeof buildPrompt>[0]> = {}) {
   return {
@@ -77,6 +98,7 @@ function req(over: Partial<Parameters<typeof buildPrompt>[0]> = {}) {
     mode: MODE_SPECS.observation,
     topPosts: [],
     assets,
+    anchor: DERIVED,
     ...over,
   };
 }
@@ -89,6 +111,12 @@ describe('buildPrompt', () => {
     expect(p).toContain('ABOUT-ME-MARKER');
     expect(p).toContain('TONE-MARKER');
     expect(p).toContain('ANTIAI-MARKER');
+  });
+
+  it('passes the voice layers through whole instead of cutting them at a length', () => {
+    // A fixed 6000-character cut once ended about-me halfway through Hard Nos.
+    const long = { ...assets, aboutMe: `${'About. '.repeat(1500)}HARD-NOS-TAIL` };
+    expect(buildPrompt(req({ assets: long }))).toContain('HARD-NOS-TAIL');
   });
 
   it('puts the pass/fail rules last, closest to generation', () => {
@@ -122,6 +150,26 @@ describe('buildPrompt', () => {
     expect(p).toMatch(/Do not repeat these angles/);
   });
 
+  it('gives the drafter its anchor and nothing else to claim as done or seen', () => {
+    const p = buildPrompt(req());
+
+    expect(p).toContain('Read the 10 posts showing under #USJoblessClaimsFallTo206000 on Square.');
+    expect(p).toMatch(/Any other claim of something you did, saw, held or tested is invented/);
+  });
+
+  it('anchors a post with no material on a stated position', () => {
+    const stance: AnchorAssignment = { tier: 'stance', ref: null, material: [], mayNameJob: true };
+    const p = buildPrompt(req({ anchor: stance }));
+
+    expect(p).toMatch(/take a side, in first person/);
+    expect(p).toMatch(/Do not claim to have done, seen, held, traded or tested anything/);
+  });
+
+  it('forbids naming the job while the cap is in use', () => {
+    const p = buildPrompt(req({ anchor: { ...DERIVED, mayNameJob: false } }));
+    expect(p).toMatch(/Do not name the author's job or years of experience/);
+  });
+
   it('feeds corrections back verbatim and forbids working around them', () => {
     const p = buildPrompt(req({ corrections: ['Remove the em-dash (Rule E7).'] }));
     expect(p).toContain('Remove the em-dash (Rule E7).');
@@ -132,7 +180,7 @@ describe('buildPrompt', () => {
 describe('composeDraft', () => {
   it('passes on the first attempt using the free tier', async () => {
     const { client } = queueLlm([GOOD, PASS]);
-    const out = await composeDraft(req(), { llm: client, recentPosts: [] });
+    const out = await composeDraft(req(), { llm: client, recent: [] });
 
     expect(out.ok).toBe(true);
     expect(out.tier).toBe('free');
@@ -141,7 +189,7 @@ describe('composeDraft', () => {
 
   it('prepends the hashtag and reports both lengths', async () => {
     const { client } = queueLlm([GOOD, PASS]);
-    const out = await composeDraft(req(), { llm: client, recentPosts: [] });
+    const out = await composeDraft(req(), { llm: client, recent: [] });
 
     expect(out.body.startsWith('#USJoblessClaimsFallTo206000')).toBe(true);
     expect(out.lengths.nfd).toBeGreaterThan(0);
@@ -157,7 +205,7 @@ describe('composeDraft', () => {
       PASS,
     ]);
 
-    const out = await composeDraft(req(), { llm: client, recentPosts: [], maxAttempts: 2 });
+    const out = await composeDraft(req(), { llm: client, recent: [], maxAttempts: 2 });
 
     expect(out.ok).toBe(true);
     expect(out.escalated).toBe(true);
@@ -167,7 +215,7 @@ describe('composeDraft', () => {
 
   it('never pays on the first attempt, since that would destroy the measurement', async () => {
     const { client } = queueLlm([GOOD, PASS]);
-    const out = await composeDraft(req(), { llm: client, recentPosts: [] });
+    const out = await composeDraft(req(), { llm: client, recent: [] });
     expect(out.attempts[0]!.tier).toBe('free');
   });
 
@@ -186,7 +234,7 @@ describe('composeDraft', () => {
     const { client } = queueLlm([jobDraft, PASS]);
     const out = await composeDraft(req(), {
       llm: client,
-      recentPosts: ['An earlier post where I mention my day job as a tester.'],
+      recent: [recentPost('An earlier post where I mention my day job as a tester.')],
       maxAttempts: 1,
     });
 
@@ -196,18 +244,55 @@ describe('composeDraft', () => {
     expect(out.attempts[0]!.corrections.join(' ')).toMatch(/stated position/);
   });
 
+  it('counts the job mention in a hand-written post on the same account', async () => {
+    // The mention sits in personaText (the disclaimer line, past the shape body).
+    const handWritten = {
+      ...recentPost('A post about settlement windows.'),
+      source: 'vault' as const,
+      personaText: 'A post about settlement windows.\n\n*Written by a QA, not an adviser.*',
+    };
+    const jobDraft = "I've worked as a QA for years. Nobody noticed. Still unfixed. No patch.";
+
+    const { client } = queueLlm([jobDraft, PASS]);
+    const out = await composeDraft(req(), { llm: client, recent: [handWritten], maxAttempts: 1 });
+
+    expect(out.attempts[0]!.personaOk).toBe(false);
+  });
+
+  it('compares shape only against posts that have a measurable body', async () => {
+    // A vault file whose text sits past its first '---' parses to an empty body;
+    // scoring the draft against nothing would invent a distance.
+    // One long-sentence paragraph sits within 0.03 of an empty post's metrics.
+    const empty = { ...recentPost(''), source: 'vault' as const, personaText: 'x' };
+    const flat =
+      'The weekly print and the monthly print describe the same slide and only the window between them differs here.';
+    const { client } = queueLlm([flat]);
+    const out = await composeDraft(req(), { llm: client, recent: [empty], maxAttempts: 1 });
+
+    expect(out.attempts[0]!.shapeOk).toBe(true);
+  });
+
   it('returns the last body even when every attempt failed, so nothing is lost', async () => {
     const { client } = queueLlm([GOOD, '{"pass":false,"violations":["E4 - banned phrase"]}']);
-    const out = await composeDraft(req(), { llm: client, recentPosts: [], maxAttempts: 1 });
+    const out = await composeDraft(req(), { llm: client, recent: [], maxAttempts: 1 });
 
     expect(out.ok).toBe(false);
     expect(out.body).toContain('#USJoblessClaimsFallTo206000');
     expect(out.attempts).toHaveLength(1);
   });
 
+  it('hands the assigned anchor to the tone judge', async () => {
+    const { client, fetchMock } = queueLlmWithMock([GOOD, PASS]);
+    await composeDraft(req(), { llm: client, recent: [] });
+
+    // Call 1 is the draft, call 2 the judge.
+    const init = fetchMock.mock.calls[1]![1] as RequestInit;
+    expect(String(init.body)).toContain('Anchor assigned to this post');
+  });
+
   it('records which gate failed on each attempt', async () => {
     const { client } = queueLlm([GOOD, '{"pass":false,"violations":["E3 - hedging"]}']);
-    const out = await composeDraft(req(), { llm: client, recentPosts: [], maxAttempts: 1 });
+    const out = await composeDraft(req(), { llm: client, recent: [], maxAttempts: 1 });
 
     const a = out.attempts[0]!;
     expect(a.toneOk).toBe(false);

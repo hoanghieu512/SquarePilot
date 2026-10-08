@@ -3,7 +3,9 @@ import type { LlmClient, Tier } from '../llm/client.js';
 import { DRAFTER_SYSTEM, buildPrompt, type DraftRequest } from './drafter.js';
 import { runToneGate } from './tone-gate.js';
 import { checkShape } from './shape-scorer.js';
-import { checkPersona, recentPostBodies } from './persona-guard.js';
+import { checkPersona } from './persona-guard.js';
+import type { RecentPost } from './recent-posts.js';
+import type { AnchorAssignment, AnchorTier } from './anchor.js';
 import { composePost, type Lengths } from './text-validation.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -11,9 +13,11 @@ const logger = createLogger('compose');
 
 export interface ComposeOptions {
   llm: LlmClient;
-  db?: Database.Database;
-  /** Published bodies, newest first. Used by the shape and persona gates. */
-  recentPosts?: string[];
+  /**
+   * The account's recent posts, newest first, from the vault and the database
+   * (see `readRecentPosts`). Used by the shape and persona gates.
+   */
+  recent?: RecentPost[];
   /** Attempts before giving up. Attempt 2 onward escalates to the paid model. */
   maxAttempts?: number;
 }
@@ -34,6 +38,7 @@ export interface ComposeOutcome {
   tier: Tier;
   attempts: GateOutcome[];
   escalated: boolean;
+  anchor: AnchorAssignment;
 }
 
 /**
@@ -53,7 +58,9 @@ export async function composeDraft(
   opts: ComposeOptions,
 ): Promise<ComposeOutcome> {
   const maxAttempts = opts.maxAttempts ?? 3;
-  const recent = opts.recentPosts ?? (opts.db ? recentPostBodies(opts.db) : []);
+  const recent = opts.recent ?? [];
+  const recentShapes = recent.map((p) => p.shapeText).filter((t) => t.trim().length > 0);
+  const recentPersona = recent.map((p) => p.personaText);
 
   const attempts: GateOutcome[] = [];
   let corrections: string[] = [];
@@ -81,9 +88,10 @@ export async function composeDraft(
       llm: opts.llm,
       assets: req.assets,
       tier: 'free',
+      anchor: req.anchor,
     });
-    const shape = checkShape(composed.body, recent);
-    const persona = checkPersona(composed.body, recent);
+    const shape = checkShape(composed.body, recentShapes);
+    const persona = checkPersona(composed.body, recentPersona);
 
     const next = [
       ...tone.corrections,
@@ -109,6 +117,7 @@ export async function composeDraft(
         tier,
         attempts,
         escalated: attempt > 1,
+        anchor: req.anchor,
       };
     }
 
@@ -127,6 +136,7 @@ export async function composeDraft(
     tier: 'paid',
     attempts,
     escalated: maxAttempts > 1,
+    anchor: req.anchor,
   };
 }
 
@@ -140,9 +150,9 @@ export function recordDraft(
   const info = db
     .prepare(
       `INSERT INTO drafts
-         (selection_id, body, nfc_len, nfd_len, shape_vector, tone_gate, shape_gate,
-          model_used, escalated, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+         (selection_id, body, nfc_len, nfd_len, shape_vector, tone_gate, shape_gate, persona_gate,
+          anchor_tier, anchor_ref, attempts_json, model_used, escalated, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
     )
     .run(
       selectionId,
@@ -152,9 +162,24 @@ export function recordDraft(
       shapeVector,
       last?.toneOk ? 'pass' : `fail: ${last?.corrections.join(' | ') ?? 'unknown'}`,
       last?.shapeOk ? 'pass' : 'fail',
+      last?.personaOk ? 'pass' : 'fail',
+      outcome.anchor.tier,
+      outcome.anchor.ref,
+      JSON.stringify(outcome.attempts),
       outcome.tier,
       outcome.escalated ? 1 : 0,
       new Date().toISOString(),
     );
   return Number(info.lastInsertRowid);
+}
+
+/** Anchor tiers of the most recently published posts, newest first. */
+export function recentAnchorTiers(db: Database.Database, limit = 10): (AnchorTier | null)[] {
+  const rows = db
+    .prepare(
+      `SELECT d.anchor_tier AS tier FROM posts p JOIN drafts d ON d.id = p.draft_id
+       ORDER BY p.published_at DESC LIMIT ?`,
+    )
+    .all(limit) as { tier: AnchorTier | null }[];
+  return rows.map((r) => r.tier);
 }

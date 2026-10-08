@@ -4,6 +4,7 @@ import type { Perspective } from '../perspective/types.js';
 import type { ModeSpec } from './modes.js';
 import { constraintsAsInstructions } from './modes.js';
 import type { VoiceAssets } from './prompt-assets.js';
+import { anchorInstructions, type AnchorAssignment } from './anchor.js';
 import { TARGET_NFC } from './text-validation.js';
 
 export interface DraftRequest {
@@ -12,6 +13,8 @@ export interface DraftRequest {
   mode: ModeSpec;
   topPosts: HashtagPost[];
   assets: VoiceAssets;
+  /** Decided by the pipeline before drafting; see `resolveAnchor`. */
+  anchor: AnchorAssignment;
   /** Feedback from a failed gate, fed back on a rewrite. */
   corrections?: string[];
 }
@@ -28,10 +31,6 @@ not hedge the given one into neutrality.
 Write English. Output the post body only: no title, no preamble, no sign-off, no
 markdown headings, no commentary about what you wrote.`;
 
-function trimAsset(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, limit)}\n[...truncated]`;
-}
-
 /**
  * Build the prompt.
  *
@@ -45,8 +44,8 @@ export function buildPrompt(req: DraftRequest): string {
 
   const parts: string[] = [];
 
-  parts.push('## Layer 0 - Who is writing\n\n' + trimAsset(assets.aboutMe, 6000));
-  parts.push('## Layer 1 - Voice\n\n' + trimAsset(assets.toneGuidelines, 9000));
+  parts.push('## Layer 0 - Who is writing\n\n' + assets.aboutMe);
+  parts.push('## Layer 1 - Voice\n\n' + assets.toneGuidelines);
 
   parts.push(
     '## Layer 2 - Today\n\n' +
@@ -76,6 +75,8 @@ export function buildPrompt(req: DraftRequest): string {
     );
   }
 
+  parts.push(anchorInstructions(req.anchor));
+
   parts.push('### Form\n\n' + constraintsAsInstructions(mode).map((c) => `- ${c}`).join('\n'));
 
   parts.push(
@@ -92,7 +93,7 @@ export function buildPrompt(req: DraftRequest): string {
     );
   }
 
-  parts.push('## Layer 3 - Pass/fail rules, read last\n\n' + trimAsset(assets.antiAiRules, 14000));
+  parts.push('## Layer 3 - Pass/fail rules, read last\n\n' + assets.antiAiRules);
 
   return parts.join('\n\n---\n\n');
 }
