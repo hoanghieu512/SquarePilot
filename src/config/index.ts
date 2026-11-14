@@ -69,3 +69,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: env.LOG_LEVEL?.trim() || DEFAULTS.LOG_LEVEL,
   };
 }
+
+export interface ZaloConfig {
+  token: string;
+  /** Null until the setup script has read it from the first message. */
+  chatId: string | null;
+  apiBase: string;
+}
+
+/**
+ * The approval bot, read separately from `loadConfig` so the one-off setup
+ * script can run before the rest of the environment is filled in.
+ */
+export function loadZaloConfig(env: NodeJS.ProcessEnv = process.env): ZaloConfig {
+  const token = env.ZALO_BOT_TOKEN?.trim();
+  if (!token) {
+    throw new ConfigError('Missing ZALO_BOT_TOKEN. Add the approval bot token to .env.');
+  }
+  return {
+    token,
+    chatId: env.ZALO_CHAT_ID?.trim() || null,
+    apiBase: env.ZALO_API_BASE?.trim() || 'https://bot-api.zaloplatforms.com',
+  };
+}
