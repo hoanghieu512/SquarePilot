@@ -29,6 +29,75 @@ describe('hashtagToHeadline', () => {
   });
 });
 
+describe('hashtagToHeadline real hashtags', () => {
+  it.each([
+    ['#BitcoinActiveSupplyInProfitDropsBelow45%', 'BITCOIN ACTIVE SUPPLY IN PROFIT DROPS BELOW 45%'],
+    ['#BitgetHotWalletBreachTiedToThirdPartySecurityFlaw', 'BITGET HOT WALLET BREACH TIED TO THIRD PARTY SECURITY FLAW'],
+    ['#BitwiseLaunchesFirstSpotNEARETF', 'BITWISE LAUNCHES FIRST SPOT NEAR ETF'],
+    ['#CEARenamesToBNBStandardUnderBNC', 'CEA RENAMES TO BNB STANDARD UNDER BNC'],
+    ['#ChainlinkLaunchesBankSWIFTLedgerFramework', 'CHAINLINK LAUNCHES BANK SWIFT LEDGER FRAMEWORK'],
+    ['#EarningsSeason', 'EARNINGS SEASON'],
+    ['#MulticoinInvestsInGrass', 'MULTICOIN INVESTS IN GRASS'],
+    ['#OpenAIUnveilsAlwaysOnAgentDots', 'OPENAI UNVEILS ALWAYS ON AGENT DOTS'],
+    ['#PolkadotCommunityApprovesNewStrategyWith97%Vote', 'POLKADOT COMMUNITY APPROVES NEW STRATEGY WITH 97% VOTE'],
+    ['#SECChairWantsStockMarketsOnChain', 'SEC CHAIR WANTS STOCK MARKETS ON CHAIN'],
+    ['#TONStrategyReports$23.97MQ3NetLoss', 'TON STRATEGY REPORTS $23.97M Q3 NET LOSS'],
+    ['#TradFiForBeginners', 'TRADFI FOR BEGINNERS'],
+    ['#TrumpRejectsAIRulesForVoluntaryAudits', 'TRUMP REJECTS AI RULES FOR VOLUNTARY AUDITS'],
+    ['#USJobOpeningsFallToFiveMonthLow', 'US JOB OPENINGS FALL TO FIVE MONTH LOW'],
+    ['#USPPIMissMayEaseBTCPressure', 'US PPI MISS MAY EASE BTC PRESSURE'],
+    ['#USSpotXRPETFsSeeLargestWeeklyOutflowIn8Months', 'US SPOT XRP ETFS SEE LARGEST WEEKLY OUTFLOW IN 8 MONTHS'],
+    ['#WORPTLetsTouristsConvertCryptoToThaiBaht', 'WORPT LETS TOURISTS CONVERT CRYPTO TO THAI BAHT'],
+    ['#WhatWillDriveCryptoandStocks’NextRebound?', 'WHAT WILL DRIVE CRYPTO AND STOCKS’ NEXT REBOUND?'],
+    ['#WhoWillSucceedJensenHuangatNvidia?', 'WHO WILL SUCCEED JENSEN HUANG AT NVIDIA?'],
+    ['#dYdXPlansV9.9UpgradeToShiftUSDCToInjective', 'DYDX PLANS V9.9 UPGRADE TO SHIFT USDC TO INJECTIVE'],
+  ])('%s', (input, expected) => {
+    expect(hashtagToHeadline(input)).toBe(expected);
+  });
+});
+
+describe('hashtagToHeadline guard cases', () => {
+  it.each([
+    ['#PolandBansCryptoAds', 'POLAND BANS CRYPTO ADS'],
+    ['#ThailandLaunchesSandbox', 'THAILAND LAUNCHES SANDBOX'],
+    ['#StandardCharteredRaisesTarget', 'STANDARD CHARTERED RAISES TARGET'],
+    ['#DemandForETHSurges', 'DEMAND FOR ETH SURGES'],
+    ['#GreatRotationIntoAlts', 'GREAT ROTATION INTO ALTS'],
+    ['#FlatFeesReturnToCoinbase', 'FLAT FEES RETURN TO COINBASE'],
+    ['#CombatFraudTaskForce', 'COMBAT FRAUD TASK FORCE'],
+    ['#FormatWarsOverStablecoins', 'FORMAT WARS OVER STABLECOINS'],
+    ['#BitcoinPriceHits100K', 'BITCOIN PRICE HITS 100K'],
+    ['#CryptoMarketsRally', 'CRYPTO MARKETS RALLY'],
+    ['#ProofOfReservesUpdate', 'PROOF OF RESERVES UPDATE'],
+    ['#BlackRockBuysMoreETH', 'BLACKROCK BUYS MORE ETH'],
+    ['#DeFiTVLHits$200B', 'DEFI TVL HITS $200B'],
+  ])('%s', (input, expected) => {
+    expect(hashtagToHeadline(input)).toBe(expected);
+  });
+});
+
+describe('hashtagToHeadline glued function words', () => {
+  it.each([
+    ['#ThreatActorsTargetBridges', 'THREAT ACTORS TARGET BRIDGES'],
+    ['#RepeatHackHitsDEX', 'REPEAT HACK HITS DEX'],
+    ['#DefeatForSECInCourt', 'DEFEAT FOR SEC IN COURT'],
+    ['#DemocratLeaderBacksBill', 'DEMOCRAT LEADER BACKS BILL'],
+    ['#HollandCasinoAcceptsBTC', 'HOLLAND CASINO ACCEPTS BTC'],
+    ['#SwitzerlandApprovesETF', 'SWITZERLAND APPROVES ETF'],
+    ['#MainlandChinaBansMining', 'MAINLAND CHINA BANS MINING'],
+    ['#HabitatForCryptoFund', 'HABITAT FOR CRYPTO FUND'],
+    ['#WithstandSellPressure', 'WITHSTAND SELL PRESSURE'],
+    ['#WhatWillDriveCryptoandStocks’NextRebound?', 'WHAT WILL DRIVE CRYPTO AND STOCKS’ NEXT REBOUND?'],
+    ['#WhoWillSucceedJensenHuangatNvidia?', 'WHO WILL SUCCEED JENSEN HUANG AT NVIDIA?'],
+    ['#BitcoinandEthereumRally', 'BITCOIN AND ETHEREUM RALLY'],
+    ['#SolanaatRecordHigh', 'SOLANA AT RECORD HIGH'],
+    ['#WombatWalletLaunches', 'WOMBAT WALLET LAUNCHES'],
+    ['#CopycatTokenScam', 'COPYCAT TOKEN SCAM'],
+  ])('%s', (input, expected) => {
+    expect(hashtagToHeadline(input)).toBe(expected);
+  });
+});
+
 describe('extractNumbers', () => {
   it('finds figures worth putting on a card', () => {
     const numbers = extractNumbers([post('Strategy sold $333.7M of stock while BTC fell 2.4%')]);

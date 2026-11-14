@@ -93,21 +93,68 @@ export interface GateInput {
 
 /** `#USJoblessClaimsFallTo206000` → `US JOBLESS CLAIMS FALL TO 206000`. */
 export function hashtagToHeadline(hashtag: string): string {
-  return hashtag
+  const raw = hashtag
     .replace(/^#/, '')
+    // A glued lower-case function word: Cryptoand|Stocks -> Crypto and Stocks.
+    // Only split after a, i, o, u, n or g (Crypto|and, Bitcoin|and, Huang|at, Solana|at).
+    // English words ending in -and or -at (Holland, Threat, Democrat, Habitat, Wombat)
+    // have a consonant or e before the function word, so they are left whole.
+    .replace(/([A-Z][a-z]{2,}?[aiougn])(and|at)(?=[A-Z])/g, '$1 $2 ')
+    // A curly or straight apostrophe followed by a capital: Stocks’Next.
+    .replace(/(['’])(?=[A-Z])/g, '$1 ');
+
+  // Brands keep their own letters, so only the text between them is split.
+  const parts = raw.split(BRAND_RE).map((part, i) => (i % 2 === 1 ? part : splitWords(part)));
+  return parts
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .toUpperCase()
+    .trim();
+}
+
+/** Mixed-case or lower-case brands and plurals that no case rule can split correctly. Sorted. */
+export const KNOWN_BRANDS = ['BlackRock', 'DeFi', 'ETFs', 'OpenAI', 'TradFi', 'dYdX'] as const;
+
+/** Acronyms used to split glued upper-case runs such as USPPI or NEARETF. Sorted. */
+export const KNOWN_ACRONYMS = [
+  'AI', 'BNB', 'BTC', 'CPI', 'ETF', 'ETH', 'NEAR', 'PPI', 'SEC', 'SWIFT', 'TVL', 'US', 'USDC', 'XRP',
+] as const;
+
+const BRAND_RE = new RegExp(`(${KNOWN_BRANDS.join('|')})`);
+
+/** Split an upper-case run into known acronyms with the fewest parts, or leave it alone. */
+function splitAcronymRun(run: string): string {
+  const best: (string[] | null)[] = new Array(run.length + 1).fill(null);
+  best[0] = [];
+  for (let end = 1; end <= run.length; end++) {
+    for (const a of KNOWN_ACRONYMS) {
+      const prev = end - a.length >= 0 ? best[end - a.length] : null;
+      if (prev && run.slice(end - a.length, end) === a && (!best[end] || prev.length + 1 < best[end]!.length)) {
+        best[end] = [...prev, a];
+      }
+    }
+  }
+  return best[run.length] ? best[run.length]!.join(' ') : run;
+}
+
+function splitWords(text: string): string {
+  return text
     // Split an acronym from the word that follows it: USJobless -> US Jobless.
     // Without this the leading initials glue onto the first word.
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/([A-Za-z])(\d)/g, '$1 $2')
+    // V9.9 and Q3 are single tokens, so V and Q stay attached to their digits.
+    .replace(/([A-PR-UW-Za-z])(\d)/g, '$1 $2')
     // Currency marks and the digits after them run into the previous word:
     // Above$3.4Highest -> ABOVE $3.4 HIGHEST.
     .replace(/([A-Za-z])(\$)/g, '$1 $2')
-    .replace(/(\d)([A-Z])/g, '$1 $2')
+    // A K/M/B/T unit stays on its figure unless a lower-case letter follows (8Months).
+    .replace(/(\d)(?![KMBT](?![a-z]))([A-Z])/g, '$1 $2')
+    // A unit can run into a quarter or version token: $23.97MQ3 -> $23.97M Q3.
+    .replace(/(\d[KMBT])(?=[VQ]\d)/g, '$1 ')
     // A percent sign ends a figure; the next word must not stick to it.
     .replace(/(%)([A-Za-z])/g, '$1 $2')
-    .toUpperCase()
-    .trim();
+    .replace(/\b[A-Z]{4,}\b/g, splitAcronymRun);
 }
 
 function splitHeadline(text: string): { headline_1: string; headline_2?: string } {
