@@ -119,14 +119,14 @@ describe('extractFigures years', () => {
   it('treats a non-current bare year as a figure', () => {
     const figures = extractFigures('since 2015', { currentYear: 2026 });
     expect(figures).toEqual([
-      { raw: '2015', value: 2015, unit: 'plain', precision: 1, index: 6 },
+      { raw: '2015', value: 2015, unit: 'plain', precision: 1, sign: 0, index: 6 },
     ]);
   });
 });
 
 describe('isSupported matching table', () => {
   it.each<{ draft: string; source: string; expected: boolean }>([
-    { draft: '$68k', source: '68,214', expected: true },
+    { draft: '$68k', source: '$68,214', expected: true },
     { draft: '2.5%', source: '2.47%', expected: true },
     { draft: '1.2 billion', source: '$1,180,000,000', expected: true },
     { draft: '-12%', source: 'down 12%', expected: true },
@@ -191,5 +191,60 @@ describe('figureAppearsIn', () => {
     { raw: 'Web3', text: 'Web3 adoption continues', expected: false },
   ])('figureAppearsIn($raw, $text) -> $expected', ({ raw, text, expected }) => {
     expect(figureAppearsIn(raw, text)).toBe(expected);
+  });
+});
+
+describe('round-2 figure fixes', () => {
+  it('extracts figures hidden behind a word hyphen (mid-2015, sub-$50k, under-5%)', () => {
+    const result = checkFigures('Held since mid-2015 after sub-$50k and under-5% yields', []);
+    expect(result.ok).toBe(false);
+    expect(result.unsupported.map((f) => f.raw)).toEqual(['2015', '$50k', '5%']);
+  });
+
+  it('extracts durations of 10 or less (7-day, 6-month, 10-year)', () => {
+    const result = checkFigures('A 7-day outflow hit a 6-month and 10-year record', []);
+    expect(result.ok).toBe(false);
+    expect(result.unsupported.map((f) => f.raw)).toEqual(['7-day', '6-month', '10-year']);
+  });
+
+  it('rejects explicit opposite signs while allowing unsigned sources to support signed figures', () => {
+    const opposite = checkFigures('Funding is +2.5%', ['Funding is -2.5%']);
+    expect(opposite.ok).toBe(false);
+    expect(opposite.unsupported.map((f) => f.raw)).toEqual(['+2.5%']);
+
+    const unsignedSource = checkFigures('-12%', ['down 12%']);
+    expect(unsignedSource.ok).toBe(true);
+  });
+
+  it('requires a currency source for a currency figure while allowing plain figures to match currency sources', () => {
+    const currencyVsPlain = checkFigures('Dropped to $1,856 from $137k', [
+      '137290 views across 1856 posts.',
+    ]);
+    expect(currencyVsPlain.ok).toBe(false);
+    expect(currencyVsPlain.unsupported.map((f) => f.raw)).toEqual(['$1,856', '$137k']);
+
+    const plainVsCurrency = checkFigures('68,214 wallets', ['$68,214']);
+    expect(plainVsCurrency.ok).toBe(true);
+  });
+
+  it('extracts the right side of "$60 billion-$99 billion"', () => {
+    const result = checkFigures('$60 billion-$99 billion', ['$60 billion']);
+    expect(result.ok).toBe(false);
+    expect(result.unsupported.map((f) => f.raw)).toEqual(['$99 billion']);
+  });
+
+  it('supports "to" ranges in sources ("Yields moved from 3 to 5%" and "from $60 to $65B")', () => {
+    expect(checkFigures('3-5%', ['Yields moved from 3 to 5%']).ok).toBe(true);
+    expect(checkFigures('$60-$65B', ['from $60 to $65B']).ok).toBe(true);
+  });
+
+  it('supports spaced scale words like "$1.2 bn", "$3 mn", "4 tn"', () => {
+    expect(checkFigures('$1.2B', ['Outflows hit $1.2 bn']).ok).toBe(true);
+    expect(checkFigures('$3M and 4T', ['Volume hit $3 mn and 4 tn']).ok).toBe(true);
+  });
+
+  it('keeps currentYear figures in sources so "2,026 views" is supported by "2026 views"', () => {
+    const result = checkFigures('2,026 views', ['2026 views'], { currentYear: 2026 });
+    expect(result.ok).toBe(true);
   });
 });

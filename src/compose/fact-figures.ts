@@ -5,6 +5,7 @@ export interface Figure {
   value: number;
   unit: FigureUnit;
   precision: number;
+  sign: 1 | -1 | 0;
   index: number;
 }
 
@@ -26,10 +27,10 @@ const SKIP_PATTERNS: RegExp[] = [
 ];
 
 const SUFFIX_SOURCE =
-  '(?:(?:(?:mn|bn|tn|[kKmMbBtT])|\\s+(?:thousand|million|billion|trillion)\\b)(?:\\s+USDT?\\b)?|\\s+USDT?\\b|%|\\s+(?:percent|pct)\\b|[x×]|\\s+(?:bps|basis\\s+points?)\\b|-(?:second|minute|hour|day|week|month|year)s?\\b)';
+  '(?:(?:(?:mn|bn|tn|[kKmMbBtT])|\\s+(?:mn|bn|tn|thousand|million|billion|trillion)\\b)(?:\\s+USDT?\\b)?|\\s+USDT?\\b|%|\\s+(?:percent|pct)\\b|[x×]|\\s+(?:bps|basis\\s+points?)\\b|-(?:second|minute|hour|day|week|month|year)s?\\b)';
 
 const RANGE_RE = new RegExp(
-  `(?<![A-Za-z0-9_.$–-])(?<lPrefix>[+-]?(?:US\\$|\\$)?|(?:US\\$|\\$)[+-]?)(?<lNum>\\d+(?:,\\d{3})*(?:\\.\\d+)?)(?<lSuffix>(?:mn|bn|tn|[kKmMbBtT]|%|[x×])?)(?<sep>[-–])(?<rPrefix>(?:US\\$|\\$)?)(?<rNum>\\d+(?:,\\d{3})*(?:\\.\\d+)?)(?<rSuffix>${SUFFIX_SOURCE}?)(?![A-Za-z0-9_]|,\\d|\\.\\d)`,
+  `(?<![A-Za-z0-9_.$–-])(?<lPrefix>[+-]?(?:US\\$|\\$)?|(?:US\\$|\\$)[+-]?)(?<lNum>\\d+(?:,\\d{3})*(?:\\.\\d+)?)(?<lSuffix>(?:mn|bn|tn|[kKmMbBtT]|%|[x×])?)(?<sep>[-–]|\\s+to\\s+)(?<rPrefix>(?:US\\$|\\$)?)(?<rNum>\\d+(?:,\\d{3})*(?:\\.\\d+)?)(?<rSuffix>${SUFFIX_SOURCE}?)(?![A-Za-z0-9_]|,\\d|\\.\\d)`,
   'gi',
 );
 
@@ -130,9 +131,12 @@ function buildNumericFigure(
   opts: FigureCheckOptions | undefined,
   exemptSet: Set<string>,
   exemptSpans: Span[],
+  isSource: boolean,
 ): Figure | null {
-  if (exemptSet.has(raw)) return null;
-  if (exemptSpans.some((s) => s.start <= index && s.end >= spanEnd)) return null;
+  if (!isSource) {
+    if (exemptSet.has(raw)) return null;
+    if (exemptSpans.some((s) => s.start <= index && s.end >= spanEnd)) return null;
+  }
 
   const clean = numStr.replace(/,/g, '');
   const dotIdx = clean.indexOf('.');
@@ -143,10 +147,13 @@ function buildNumericFigure(
   const { scale, unit, hasCurrency, hasScale } = parseScaleAndUnit(prefix, suffix);
   const precision = scale / divisor;
   const value = scale >= divisor ? intDigits * precision : (intDigits * scale) / divisor;
+  const sign: 1 | -1 | 0 = prefix.includes('-') ? -1 : prefix.includes('+') ? 1 : 0;
 
-  // Bare integers 0..10 with no unit, no "$" and no scale are skipped.
+  // Bare integers 0..10 with no suffix at all, no "$" and no scale are skipped in drafts.
   if (
+    !isSource &&
     unit === 'plain' &&
+    suffix === '' &&
     !hasCurrency &&
     !hasScale &&
     decimals === 0 &&
@@ -156,8 +163,9 @@ function buildNumericFigure(
     return null;
   }
 
-  // A bare year 1900-2100 equal to opts.currentYear is allowed without support.
+  // A bare year 1900-2100 equal to opts.currentYear is allowed without support in drafts.
   if (
+    !isSource &&
     opts?.currentYear !== undefined &&
     unit === 'plain' &&
     !hasCurrency &&
@@ -170,17 +178,22 @@ function buildNumericFigure(
     return null;
   }
 
-  return { raw, value, unit, precision, index };
+  return { raw, value, unit, precision, sign, index };
 }
 
-export function extractFigures(text: string, opts?: FigureCheckOptions): Figure[] {
+function extractFiguresInternal(
+  text: string,
+  opts: FigureCheckOptions | undefined,
+  isSource: boolean,
+): Figure[] {
   const skipSpans = collectSkipSpans(text);
-  const exemptSet = new Set(opts?.exempt ?? []);
-  const exemptSpans = collectExemptSpans(text, opts?.exempt);
+  const exemptSet = isSource ? new Set<string>() : new Set(opts?.exempt ?? []);
+  const exemptSpans = isSource ? [] : collectExemptSpans(text, opts?.exempt);
+  const matchText = text.replace(/(?<=[A-Za-z%])[-–](?=[\d$])/g, ' ');
   const consumed: Span[] = [...skipSpans];
   const out: Figure[] = [];
 
-  for (const m of text.matchAll( new RegExp(TIME_RE.source, TIME_RE.flags) )) {
+  for (const m of matchText.matchAll(new RegExp(TIME_RE.source, TIME_RE.flags))) {
     const start = m.index!;
     const end = start + m[0].length;
     const span = { start, end };
@@ -188,19 +201,22 @@ export function extractFigures(text: string, opts?: FigureCheckOptions): Figure[
     consumed.push(span);
 
     const raw = m[0];
-    if (exemptSet.has(raw)) continue;
-    if (exemptSpans.some((s) => s.start <= start && s.end >= end)) continue;
+    if (!isSource) {
+      if (exemptSet.has(raw)) continue;
+      if (exemptSpans.some((s) => s.start <= start && s.end >= end)) continue;
+    }
 
     out.push({
       raw,
       value: Number(`${m[1]!}${m[2]!}`),
       unit: 'plain',
       precision: 1,
+      sign: 0,
       index: start,
     });
   }
 
-  for (const m of text.matchAll(new RegExp(RANGE_RE.source, RANGE_RE.flags))) {
+  for (const m of matchText.matchAll(new RegExp(RANGE_RE.source, RANGE_RE.flags))) {
     const start = m.index!;
     const end = start + m[0].length;
     const span = { start, end };
@@ -223,7 +239,7 @@ export function extractFigures(text: string, opts?: FigureCheckOptions): Figure[
     const leftRaw = `${effLeftPrefix}${lNum}${effLeftSuffix}`;
     const leftSpanEnd = start + lPrefix.length + lNum.length + lSuffix.length;
     const rightIndex = leftSpanEnd + sep.length;
-    const rightRaw = `${ rPrefix }${rNum}${rSuffix}`;
+    const rightRaw = `${rPrefix}${rNum}${rSuffix}`;
 
     const first = buildNumericFigure(
       leftRaw,
@@ -235,6 +251,7 @@ export function extractFigures(text: string, opts?: FigureCheckOptions): Figure[
       opts,
       exemptSet,
       exemptSpans,
+      isSource,
     );
     if (first) out.push(first);
 
@@ -248,11 +265,12 @@ export function extractFigures(text: string, opts?: FigureCheckOptions): Figure[
       opts,
       exemptSet,
       exemptSpans,
+      isSource,
     );
     if (second) out.push(second);
   }
 
-  for (const m of text.matchAll(new RegExp(SINGLE_RE.source, SINGLE_RE.flags))) {
+  for (const m of matchText.matchAll(new RegExp(SINGLE_RE.source, SINGLE_RE.flags))) {
     const start = m.index!;
     const end = start + m[0].length;
     const span = { start, end };
@@ -270,6 +288,7 @@ export function extractFigures(text: string, opts?: FigureCheckOptions): Figure[
       opts,
       exemptSet,
       exemptSpans,
+      isSource,
     );
     if (fig) out.push(fig);
   }
@@ -278,9 +297,13 @@ export function extractFigures(text: string, opts?: FigureCheckOptions): Figure[
   return out;
 }
 
-function unitsCompatible(a: FigureUnit, b: FigureUnit): boolean {
-  if (a === b) return true;
-  return (a === 'currency' && b === 'plain') || (a === 'plain' && b === 'currency');
+export function extractFigures(text: string, opts?: FigureCheckOptions): Figure[] {
+  return extractFiguresInternal(text, opts, false);
+}
+
+function unitsCompatible(figUnit: FigureUnit, srcUnit: FigureUnit): boolean {
+  if (figUnit === srcUnit) return true;
+  return figUnit === 'plain' && srcUnit === 'currency';
 }
 
 export function isSupported(figure: Figure, sources: Figure[]): boolean {
@@ -289,6 +312,7 @@ export function isSupported(figure: Figure, sources: Figure[]): boolean {
   const tol = p * 1e-6;
 
   for (const src of sources) {
+    if (figure.sign * src.sign === -1) continue;
     if (!unitsCompatible(figure.unit, src.unit)) continue;
     const rounded = Math.round(Math.abs(src.value) / p) * p;
     if (Math.abs(rounded - figVal) <= tol) return true;
@@ -302,7 +326,7 @@ export function checkFigures(
   opts?: FigureCheckOptions,
 ): { ok: boolean; unsupported: Figure[]; corrections: string[] } {
   const bodyFigures = extractFigures(body, opts);
-  const sources = extractFigures(sourceTexts.join('\n'), opts);
+  const sources = extractFiguresInternal(sourceTexts.join('\n'), undefined, true);
 
   const seenRaw = new Set<string>();
   const unsupported: Figure[] = [];
@@ -329,6 +353,6 @@ export function checkFigures(
 export function figureAppearsIn(raw: string, text: string): boolean {
   const targets = extractFigures(raw);
   if (targets.length === 0) return false;
-  const sources = extractFigures(text);
+  const sources = extractFiguresInternal(text, undefined, true);
   return targets.every((fig) => isSupported(fig, sources));
 }
