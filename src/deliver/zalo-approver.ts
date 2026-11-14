@@ -6,6 +6,7 @@ import {
   expireStale,
   pendingDraftIds,
   resolve,
+  revertRewriteToPending,
   revertToPending,
   statusOf,
 } from './approval-store.js';
@@ -206,61 +207,66 @@ export async function sendForApproval(deps: ApproverDeps, card: DraftCard): Prom
   await deps.api.sendMessage(deps.chatId, formatFooter(code));
 }
 
-export function parseCommand(text: string): ParsedCommand | null {
-  const norm = text
+function normalizeVerbToken(token: string): string {
+  return token
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/đ/g, 'd');
+}
 
-  if (!norm) return null;
-  if (norm === '?' || norm === 'help') {
+export function parseCommand(text: string): ParsedCommand | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const rawTokens = trimmed.split(/\s+/);
+  const v0 = normalizeVerbToken(rawTokens[0]!);
+
+  if (rawTokens.length === 1 && (v0 === '?' || v0 === 'help')) {
     return { action: 'help' };
   }
 
-  const tokens = norm.split(' ');
+  const v1 = rawTokens[1] !== undefined ? normalizeVerbToken(rawTokens[1]) : undefined;
   let action: 'publish' | 'rewrite' | 'newVisual' | 'reject' | null = null;
   let idx = 0;
 
-  if (tokens[0] === 'viet' && tokens[1] === 'lai') {
+  if (v0 === 'viet' && v1 === 'lai') {
     action = 'rewrite';
     idx = 2;
-  } else if (tokens[0] === 'doi' && tokens[1] === 'anh') {
+  } else if (v0 === 'doi' && v1 === 'anh') {
     action = 'newVisual';
     idx = 2;
-  } else if (tokens[0] === 'd' || tokens[0] === 'dang') {
+  } else if (v0 === 'd' || v0 === 'dang') {
     action = 'publish';
     idx = 1;
-  } else if (tokens[0] === 'v' || tokens[0] === 'viet') {
+  } else if (v0 === 'v' || v0 === 'viet') {
     action = 'rewrite';
     idx = 1;
-  } else if (tokens[0] === 'a' || tokens[0] === 'anh') {
+  } else if (v0 === 'a' || v0 === 'anh') {
     action = 'newVisual';
     idx = 1;
-  } else if (tokens[0] === 'b' || tokens[0] === 'bo') {
+  } else if (v0 === 'b' || v0 === 'bo') {
     action = 'reject';
     idx = 1;
   } else {
     return null;
   }
 
-  const rest = tokens.slice(idx);
+  const rest = rawTokens.slice(idx);
   if (rest.length === 0) {
     return { action };
   }
 
   if (action !== 'reject') {
     if (rest.length !== 1) return null;
-    const rawCode = rest[0]!;
+    const rawCode = rest[0]!.toLowerCase();
     if (!CODE_RE.test(rawCode)) return null;
     return { action, code: rawCode.toUpperCase() };
   }
 
   // Reject grammar: b [code] [reason digit]
   if (rest.length === 1) {
-    const arg = rest[0]!;
+    const arg = rest[0]!.toLowerCase();
     if (/^[1-6]$/.test(arg)) {
       const reason = REJECT_REASONS[Number(arg) - 1]!.code;
       return { action: 'reject', reason };
@@ -272,10 +278,11 @@ export function parseCommand(text: string): ParsedCommand | null {
   }
 
   if (rest.length === 2) {
-    const [rawCode, rawReason] = rest as [string, string];
+    const [rawCodeToken, rawReason] = rest as [string, string];
+    const rawCode = rawCodeToken.toLowerCase();
     if (!CODE_RE.test(rawCode) || !/^[1-6]$/.test(rawReason)) return null;
     const reason = REJECT_REASONS[Number(rawReason) - 1]!.code;
-    return { action: 'reject', code: rawCode.toUpperCase(), reason };
+    return { action, code: rawCode.toUpperCase(), reason };
   }
 
   return null;
@@ -339,7 +346,7 @@ export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Prom
       return;
     }
 
-    expireStale(deps.db, deps.now());
+    const expired = expireStale(deps.db, deps.now());
 
     let draftId: number;
     let code: string;
@@ -356,6 +363,11 @@ export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Prom
       draftId = decoded;
     } else {
       const pending = pendingDraftIds(deps.db);
+      if (expired.length > 0) {
+        const example = pending.length > 0 ? `, for example: d ${draftCode(pending[0]!)}` : '';
+        await reply(deps, `Some drafts just expired. Send the command with a code${example}`);
+        return;
+      }
       if (pending.length === 0) {
         await reply(deps, 'No draft is pending');
         return;
@@ -402,7 +414,14 @@ export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Prom
           return;
         }
         await reply(deps, `Rewriting ${code}`);
-        await deps.onRewrite(draftId);
+        try {
+          await deps.onRewrite(draftId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          revertRewriteToPending(deps.db, draftId);
+          await reply(deps, `Rewrite failed for ${code}: ${message}`);
+          return;
+        }
         return;
       }
       case 'newVisual': {
@@ -470,9 +489,12 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
       }));
 
   let backoffMs = INITIAL_BACKOFF_MS;
+  let queue: Promise<void> = Promise.resolve();
+
   while (!signal.aborted) {
+    let updates: ZaloUpdate[];
     try {
-      await pollOnce(deps, timeoutSec);
+      updates = await deps.api.getUpdates(timeoutSec);
       backoffMs = INITIAL_BACKOFF_MS;
     } catch (err) {
       if (signal.aborted) break;
@@ -482,6 +504,22 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
       });
       await sleep(backoffMs);
       backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
+      continue;
+    }
+
+    for (const update of updates) {
+      queue = queue.then(async () => {
+        try {
+          await handleUpdate(deps, update);
+        } catch (err) {
+          logger.error('Zalo update failed', {
+            messageId: update.message?.message_id,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
     }
   }
+
+  await queue;
 }

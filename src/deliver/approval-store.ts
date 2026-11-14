@@ -67,3 +67,12 @@ export function revertToPending(db: Database.Database, draftId: number): boolean
     .run(draftId);
   return info.changes === 1;
 }
+
+export function revertRewriteToPending(db: Database.Database, draftId: number): boolean {
+  const info = db
+    .prepare(
+      `UPDATE drafts SET status = 'pending', reject_reason = NULL, resolved_at = NULL WHERE id = ? AND status = 'rejected' AND reject_reason = 'rewrite-requested'`,
+    )
+    .run(draftId);
+  return info.changes === 1;
+}

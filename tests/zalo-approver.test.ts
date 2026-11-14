@@ -7,6 +7,7 @@ import {
   expireStale,
   pendingDraftIds,
   resolve,
+  revertRewriteToPending,
   revertToPending,
   statusOf,
 } from '../src/deliver/approval-store.js';
@@ -142,9 +143,21 @@ describe('parseCommand', () => {
     expect(parseCommand('đổi ảnh K7')).toEqual({ action: 'newVisual', code: 'K7' });
     expect(parseCommand('b K7 3')).toEqual({ action: 'reject', code: 'K7', reason: 'facts' });
     expect(parseCommand('Bỏ k7')).toEqual({ action: 'reject', code: 'K7' });
+    expect(parseCommand('Bỏ k7 3')).toEqual({ action: 'reject', code: 'K7', reason: 'facts' });
     expect(parseCommand('b 3')).toEqual({ action: 'reject', reason: 'facts' });
     expect(parseCommand('?')).toEqual({ action: 'help' });
     expect(parseCommand('help')).toEqual({ action: 'help' });
+  });
+
+  it('rejects accented words in the code position while keeping accented verbs', () => {
+    expect(parseCommand('d dạ')).toBeNull();
+    expect(parseCommand('d cả')).toBeNull();
+    expect(parseCommand('ảnh đẹp')).toBeNull();
+    expect(parseCommand('d nè')).toBeNull();
+    expect(parseCommand('Đăng K7')).toEqual({ action: 'publish', code: 'K7' });
+    expect(parseCommand('viết lại K7')).toEqual({ action: 'rewrite', code: 'K7' });
+    expect(parseCommand('Bỏ k7 3')).toEqual({ action: 'reject', code: 'K7', reason: 'facts' });
+    expect(parseCommand('b 3')).toEqual({ action: 'reject', reason: 'facts' });
   });
 
   it('parses code-less commands for single-draft shorthand', () => {
@@ -300,6 +313,15 @@ describe('zalo-approver and approval-store', () => {
 
       revertToPending(db, id2);
       expect(row(id2)).toEqual({ status: 'pending', reject_reason: null, resolved_at: null });
+
+      expect(resolve(db, NOW, id2, 'rejected', 'rewrite-requested')).toBe(true);
+      expect(revertToPending(db, id2)).toBe(false);
+      expect(revertRewriteToPending(db, id2)).toBe(true);
+      expect(row(id2)).toEqual({ status: 'pending', reject_reason: null, resolved_at: null });
+
+      expect(resolve(db, NOW, id2, 'rejected', 'facts')).toBe(true);
+      expect(revertRewriteToPending(db, id2)).toBe(false);
+      expect(statusOf(db, id2)).toBe('rejected');
     });
   });
 
@@ -506,6 +528,21 @@ describe('zalo-approver and approval-store', () => {
       expect(fake.calls.at(-1)?.text).toBe(`${code} is expired`);
     });
 
+    it('refuses a code-less shortcut when a draft expires during the call', async () => {
+      const id1 = insertDraft(hoursAgo(6 + 1 / 60));
+      const id2 = insertDraft(NOW.toISOString());
+      const code2 = draftCode(id2);
+
+      await handleUpdate(deps, textUpdate('d'));
+
+      expect(published).not.toHaveBeenCalled();
+      expect(row(id1).status).toBe('expired');
+      expect(row(id2).status).toBe('pending');
+      expect(fake.calls.at(-1)?.text).toBe(
+        `Some drafts just expired. Send the command with a code, for example: d ${code2}`,
+      );
+    });
+
     it('publishes once, sends "Publishing CODE…" before onPublish, and answers "CODE is approved" on a second publish', async () => {
       const id = insertDraft();
       const code = draftCode(id);
@@ -580,6 +617,29 @@ describe('zalo-approver and approval-store', () => {
         resolved_at: NOW.toISOString(),
       });
       expect(published).not.toHaveBeenCalled();
+    });
+
+    it('reverts draft to pending when onRewrite throws and allows a later publish', async () => {
+      const id = insertDraft();
+      const code = draftCode(id);
+      rewritten.mockRejectedValueOnce(new Error('llm rate limit'));
+
+      await handleUpdate(deps, textUpdate(`v ${code}`));
+
+      expect(row(id)).toEqual({
+        status: 'pending',
+        reject_reason: null,
+        resolved_at: null,
+      });
+      expect(fake.calls.map((c) => c.text)).toEqual([
+        `Rewriting ${code}`,
+        `Rewrite failed for ${code}: llm rate limit`,
+      ]);
+
+      await handleUpdate(deps, textUpdate(`d ${code}`));
+      expect(published).toHaveBeenCalledTimes(1);
+      expect(published).toHaveBeenCalledWith(id);
+      expect(row(id).status).toBe('approved');
     });
 
     it('newVisual keeps draft pending, replies before onNewVisual, and calls onNewVisual', async () => {
@@ -685,6 +745,69 @@ describe('zalo-approver and approval-store', () => {
       await pollLoop(deps, { signal: controller.signal, sleep, timeoutSec: 20 });
 
       expect(sleeps).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 5_000]);
+    });
+
+    it('pollLoop starts the next getUpdates while a handler is running and runs queued commands serially in order', async () => {
+      const id1 = insertDraft();
+      const id2 = insertDraft();
+      const code1 = draftCode(id1);
+      const code2 = draftCode(id2);
+      const controller = new AbortController();
+      const events: string[] = [];
+
+      let notifyPublishStarted!: () => void;
+      const publishStarted = new Promise<void>((r) => {
+        notifyPublishStarted = r;
+      });
+      let resolvePublish!: () => void;
+      const publishGate = new Promise<void>((r) => {
+        resolvePublish = r;
+      });
+
+      published.mockImplementation(async (draftId: number) => {
+        events.push(`publish:start:${draftId}`);
+        notifyPublishStarted();
+        await publishGate;
+        events.push(`publish:end:${draftId}`);
+      });
+
+      newVisual.mockImplementation(async (draftId: number) => {
+        events.push(`newVisual:${draftId}`);
+      });
+
+      let pollCalls = 0;
+      fake.api.getUpdates.mockImplementation(async () => {
+        pollCalls += 1;
+        if (pollCalls === 1) {
+          return [textUpdate(`d ${code1}`)];
+        }
+        if (pollCalls === 2) {
+          controller.abort();
+          return [textUpdate(`a ${code2}`)];
+        }
+        return [];
+      });
+
+      const loopPromise = pollLoop(deps, { signal: controller.signal, timeoutSec: 20 });
+      try {
+        await publishStarted;
+        expect(fake.api.getUpdates).toHaveBeenCalledTimes(2);
+        expect(newVisual).not.toHaveBeenCalled();
+
+        resolvePublish();
+        await loopPromise;
+
+        expect(published).toHaveBeenCalledTimes(1);
+        expect(events).toEqual([
+          `publish:start:${id1}`,
+          `publish:end:${id1}`,
+          `newVisual:${id2}`,
+        ]);
+      } finally {
+        resolvePublish();
+        controller.abort();
+        await loopPromise.catch(() => {});
+      }
     });
   });
 });
