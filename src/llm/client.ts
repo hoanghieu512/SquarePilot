@@ -128,6 +128,11 @@ export class LlmClient {
     throw lastError!;
   }
 
+  private redact(text: string): string {
+    const key = this.opts.apiKey;
+    return key ? text.split(key).join('[redacted]') : text;
+  }
+
   private async attempt(args: CompleteArgs): Promise<CompleteResult> {
     const tier = args.tier ?? 'free';
     const model = this.modelFor(tier);
@@ -154,7 +159,7 @@ export class LlmClient {
         signal: args.signal ?? null,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = this.redact(err instanceof Error ? err.message : String(err));
       this.record({ draftId: args.draftId, purpose: args.purpose, model, ok: false, error: message });
       // Connection-level failure: nothing reached the model, always worth another try.
       throw new LlmError(`Request to OpenRouter failed: ${message}`, true);
@@ -163,7 +168,9 @@ export class LlmClient {
     const raw = (await response.json().catch(() => ({}))) as OpenRouterResponse;
 
     if (!response.ok || raw.error) {
-      const message = raw.error?.message ?? `HTTP ${response.status}`;
+      // Provider error text is stored and can reach the approval chat; a
+      // provider that echoes the key must not put it there.
+      const message = this.redact(raw.error?.message ?? `HTTP ${response.status}`);
       this.record({ draftId: args.draftId, purpose: args.purpose, model, ok: false, error: message });
       throw new LlmError(
         `OpenRouter rejected the request: ${message}`,

@@ -212,6 +212,19 @@ describe('LlmClient', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-or-test');
   });
 
+  it('redacts the api key from a provider error that echoes it, in the throw and in llm_calls', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ error: { message: 'Invalid key sk-or-test for this route' } }, 401)),
+    );
+
+    const err = await client.complete({ purpose: 'draft', user: 'hi' }).catch((e: unknown) => e);
+    expect((err as Error).message).not.toContain('sk-or-test');
+    const row = db.prepare('SELECT error FROM llm_calls').get() as { error: string };
+    expect(row.error).not.toContain('sk-or-test');
+    expect(row.error).toContain('[redacted]');
+  });
+
   describe('retry', () => {
     function retryingClient() {
       return new LlmClient({

@@ -38,8 +38,9 @@ describe('runFactGate', () => {
 
   it('accepts figures from the hashtag, the attention line and the anchor material', async () => {
     const { llm } = judge(PASS);
-    const out = await runFactGate('137,290 views, and the desk took 14 hours to settle it.', {
+    const out = await runFactGate('Past 100K, 137,290 views, and the desk took 14 hours to settle it.', {
       ...sources,
+      hashtag: '#BitcoinHoldsAbove100K',
       anchorMaterial: ['It took 14 hours to settle.'],
     }, { llm, currentYear: 2026 });
 
@@ -93,6 +94,27 @@ describe('runFactGate', () => {
     expect(ok.ok).toBe(true);
     expect(bad.ok).toBe(false);
     expect(complete).not.toHaveBeenCalled();
+  });
+});
+
+describe('runFactGate when the judge is cut off', () => {
+  it('fails the attempt instead of throwing, and still rethrows other errors', async () => {
+    const { LlmError } = await import('../src/llm/client.js');
+    const cut = {
+      complete: vi.fn(async () => {
+        throw new LlmError('hit the token limit', false, undefined, true);
+      }),
+    } as unknown as LlmClient;
+    const out = await runFactGate('Near $68k.', sources, { llm: cut, currentYear: 2026 });
+    expect(out.ok).toBe(false);
+    expect(out.corrections[0]).toMatch(/ran out of tokens/);
+
+    const down = {
+      complete: vi.fn(async () => {
+        throw new LlmError('provider down', true);
+      }),
+    } as unknown as LlmClient;
+    await expect(runFactGate('Near $68k.', sources, { llm: down, currentYear: 2026 })).rejects.toThrow('provider down');
   });
 });
 

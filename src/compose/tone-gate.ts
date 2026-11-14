@@ -1,4 +1,4 @@
-import type { LlmClient, Tier } from '../llm/client.js';
+import { LlmError, type LlmClient, type Tier } from '../llm/client.js';
 import type { VoiceAssets } from './prompt-assets.js';
 import { anchorBrief, type AnchorAssignment } from './anchor.js';
 
@@ -159,17 +159,31 @@ export async function runToneGate(draft: string, opts: ToneGateOptions): Promise
     return { ok: false, corrections: mechanical, usedModel: false };
   }
 
-  const result = await opts.llm.complete({
-    purpose: 'tone-gate',
-    tier: opts.tier ?? 'free',
-    draftId: opts.draftId,
-    temperature: 0,
-    system: JUDGE_SYSTEM,
-    user:
-      `## Rules\n\n${opts.assets.antiAiRules}\n\n` +
-      (opts.anchor ? `${anchorBrief(opts.anchor)}\n\n` : '') +
-      `## Post to check\n\n${draft}`,
-  });
+  let result;
+  try {
+    result = await opts.llm.complete({
+      purpose: 'tone-gate',
+      tier: opts.tier ?? 'free',
+      draftId: opts.draftId,
+      temperature: 0,
+      system: JUDGE_SYSTEM,
+      user:
+        `## Rules\n\n${opts.assets.antiAiRules}\n\n` +
+        (opts.anchor ? `${anchorBrief(opts.anchor)}\n\n` : '') +
+        `## Post to check\n\n${draft}`,
+    });
+  } catch (err) {
+    // A judge cut off at the token limit gave no verdict. That fails the
+    // attempt like an unreadable verdict, instead of crashing the whole run.
+    if (err instanceof LlmError && err.truncated) {
+      return {
+        ok: false,
+        usedModel: true,
+        corrections: ['The tone check ran out of tokens before giving a verdict. Rewrite and resubmit.'],
+      };
+    }
+    throw err;
+  }
 
   const parsed = parseJudge(result.text);
   if (!parsed) {

@@ -184,3 +184,20 @@ describe('runToneGate', () => {
     expect(prompt).toMatch(/must not name the author's job/);
   });
 });
+
+describe('runToneGate when the judge is cut off', () => {
+  it('fails the attempt instead of throwing', async () => {
+    const { LlmError } = await import('../src/llm/client.js');
+    const llm = {
+      complete: vi.fn(async () => {
+        throw new LlmError('hit the token limit', false, undefined, true);
+      }),
+    } as unknown as LlmClient;
+
+    const verdict = await runToneGate(CLEAN, { llm, assets });
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.usedModel).toBe(true);
+    expect(verdict.corrections[0]).toMatch(/ran out of tokens/);
+  });
+});

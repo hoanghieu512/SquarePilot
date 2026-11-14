@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../src/database/migrations.js';
-import { recentAnchorTiers, recordDraft, type ComposeOutcome } from '../src/compose/compose-draft.js';
+import { recentAnchorTiers, recordDraft, withdrawDraft, type ComposeOutcome } from '../src/compose/compose-draft.js';
 
 function outcome(over: Partial<ComposeOutcome> = {}): ComposeOutcome {
   return {
@@ -18,6 +18,7 @@ function outcome(over: Partial<ComposeOutcome> = {}): ComposeOutcome {
         toneOk: true,
         shapeOk: true,
         personaOk: false,
+        factsOk: true,
         corrections: ['Names the job (QA) but 1 of the last 10 posts already did.'],
       },
       {
@@ -26,7 +27,13 @@ function outcome(over: Partial<ComposeOutcome> = {}): ComposeOutcome {
         toneOk: false,
         shapeOk: true,
         personaOk: true,
-        corrections: ['E5 - fabricated - "I pulled the last three prints this morning"'],
+        factsOk: false,
+        toneCorrections: ['E5 - fabricated - "I pulled the last three prints this morning"'],
+        factCorrections: ['The figure "70%" is not in the evidence.'],
+        corrections: [
+          'E5 - fabricated - "I pulled the last three prints this morning"',
+          'The figure "70%" is not in the evidence.',
+        ],
       },
     ],
     ...over,
@@ -74,6 +81,36 @@ describe('recordDraft', () => {
   it('records the persona gate of the last attempt in its own column', () => {
     const id = recordDraft(db, 1, outcome());
     expect(row(id).persona_gate).toBe('pass');
+  });
+
+  it('keeps each gate column to its own corrections', () => {
+    const id = recordDraft(db, 1, outcome());
+    expect(row(id).tone_gate).toBe('fail: E5 - fabricated - "I pulled the last three prints this morning"');
+    expect(row(id).fact_gate).toBe('fail: The figure "70%" is not in the evidence.');
+  });
+
+  it('never queues a draft that failed its gates for approval', () => {
+    const id = recordDraft(db, 1, outcome({ ok: false }));
+    expect(row(id).status).toBe('rejected');
+    expect(row(id).reject_reason).toBe('gates-failed');
+  });
+
+  it('queues a draft that passed every gate', () => {
+    const id = recordDraft(db, 1, outcome({ ok: true }));
+    expect(row(id).status).toBe('pending');
+    expect(row(id).reject_reason).toBeNull();
+  });
+
+  it('withdraws a pending draft that cannot be sent, and leaves a resolved one alone', () => {
+    const pending = recordDraft(db, 1, outcome({ ok: true }));
+    withdrawDraft(db, pending, 'no-visual');
+    expect(row(pending).status).toBe('rejected');
+    expect(row(pending).reject_reason).toBe('no-visual');
+
+    const approved = recordDraft(db, 1, outcome({ ok: true }));
+    db.prepare(`UPDATE drafts SET status = 'approved' WHERE id = ?`).run(approved);
+    withdrawDraft(db, approved, 'no-visual');
+    expect(row(approved).status).toBe('approved');
   });
 });
 

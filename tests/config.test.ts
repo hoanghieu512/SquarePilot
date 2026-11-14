@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import os from 'node:os';
-import { ConfigError, loadConfig } from '../src/config/index.js';
+import { ConfigError, loadConfig, loadZaloConfig } from '../src/config/index.js';
 
 const validEnv = {
   OPENROUTER_API_KEY: 'sk-or-test',
@@ -51,5 +51,26 @@ describe('loadConfig', () => {
     });
     expect(config.modelFree).toBe('some/other:free');
     expect(config.modelPaid).toBe('some/paid');
+  });
+});
+
+describe('loadZaloConfig', () => {
+  it('needs the bot token and nothing else', () => {
+    expect(() => loadZaloConfig({})).toThrow(/ZALO_BOT_TOKEN/);
+    expect(loadZaloConfig({ ZALO_BOT_TOKEN: ' 123:abc ' })).toEqual({
+      token: '123:abc',
+      chatId: null,
+      apiBase: 'https://bot-api.zaloplatforms.com',
+    });
+  });
+
+  it('reads the chat id and an api base override', () => {
+    const c = loadZaloConfig({ ZALO_BOT_TOKEN: 't', ZALO_CHAT_ID: 'c1', ZALO_API_BASE: 'http://127.0.0.1:9' });
+    expect(c.chatId).toBe('c1');
+    expect(c.apiBase).toBe('http://127.0.0.1:9');
+  });
+
+  it('never puts the token in its error', () => {
+    expect(() => loadZaloConfig({ ZALO_BOT_TOKEN: '   ' })).toThrow(ConfigError);
   });
 });

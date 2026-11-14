@@ -16,6 +16,12 @@ describe('hashtagCoins', () => {
     ['#GoldReboundsNearly5%', []],
     ['#ElectronicArtsDeal', []],
     ['#WashingtonPolicyShift', []],
+    // Everyday words that are also tickers (review 2026-11-15).
+    ['#GoldNearRecordHigh', []],
+    ['#FedDotPlot', []],
+    ['#RateCutRippleEffect', []],
+    ['#WeakLinkInCredit', []],
+    ['#NEARBreaksOut', ['NEAR']],
   ])('%s names %j', (hashtag, coins) => {
     expect(hashtagCoins(hashtag)).toEqual(coins);
   });
@@ -32,6 +38,31 @@ describe('groundedTickers', () => {
     expect(g.has('SOL')).toBe(true);
     expect(g.has('SEC')).toBe(false);
     expect(g.has('ETF')).toBe(false);
+  });
+});
+
+describe('groundedTickers, everyday words', () => {
+  it('does not ground a word ticker from lower-case prose', () => {
+    const g = groundedTickers({ hashtag: '#Gold', grounding: ['Gold traded near $2,700 and the link held.'] });
+    expect(g.has('NEAR')).toBe(false);
+    expect(g.has('LINK')).toBe(false);
+  });
+
+  it('grounds a word ticker written in capitals', () => {
+    const g = groundedTickers({ hashtag: '#Market', grounding: ['NEAR rose 4% on the day.'] });
+    expect(g.has('NEAR')).toBe(true);
+  });
+
+  it('strips $NEAR from a gold post even though the hashtag says "Near"', () => {
+    const r = normalizeCashtags('Gold sits close to the top, and $NEAR is not the story.', {
+      hashtag: '#GoldNearRecordHigh',
+      grounding: ['Gold spot traded near $2,700.'],
+    });
+    expect(r.text).toBe('Gold sits close to the top, and NEAR is not the story.');
+  });
+
+  it('gives no coin hint for a hashtag that only contains the word', () => {
+    expect(cashtagInstructions('#GoldNearRecordHigh')).not.toContain('The trending hashtag names');
   });
 });
 

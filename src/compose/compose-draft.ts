@@ -34,6 +34,9 @@ export interface GateOutcome {
   personaOk: boolean;
   /** Figures and claims are backed by the sources (see `fact-gate.ts`). */
   factsOk: boolean;
+  /** Per-gate reasons, so the gate columns hold their own gate's corrections. */
+  toneCorrections?: string[];
+  factCorrections?: string[];
   /** Set when the drafter call hit the token limit; no gate ran for this attempt. */
   truncated?: true;
   corrections: string[];
@@ -112,7 +115,8 @@ export async function composeDraft(
 
     const tagged = normalizeCashtags(result.text.trim(), {
       hashtag: req.trend.hashtag,
-      grounding: [req.perspective.summary, ...req.perspective.evidence, ...req.perspective.guardrails],
+      // Guardrails are left out: they name what the post must NOT do.
+      grounding: [req.perspective.summary, ...req.perspective.evidence],
     });
     if (tagged.removed.length > 0 || tagged.added.length > 0) {
       logger.info('Cashtags adjusted', { removed: tagged.removed, added: tagged.added });
@@ -153,6 +157,8 @@ export async function composeDraft(
       shapeOk: shape.ok,
       personaOk: persona.ok,
       factsOk: facts.ok,
+      toneCorrections: tone.corrections,
+      factCorrections: facts.corrections,
       corrections: next,
     });
 
@@ -200,8 +206,9 @@ export function recordDraft(
     .prepare(
       `INSERT INTO drafts
          (selection_id, body, nfc_len, nfd_len, shape_vector, tone_gate, shape_gate, persona_gate,
-          fact_gate, anchor_tier, anchor_ref, attempts_json, model_used, escalated, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          fact_gate, anchor_tier, anchor_ref, attempts_json, model_used, escalated, status,
+          reject_reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       selectionId,
@@ -209,18 +216,38 @@ export function recordDraft(
       outcome.lengths.nfc,
       outcome.lengths.nfd,
       shapeVector,
-      last?.toneOk ? 'pass' : `fail: ${last?.corrections.join(' | ') ?? 'unknown'}`,
+      gateColumn(last?.toneOk, last?.toneCorrections ?? last?.corrections),
       last?.shapeOk ? 'pass' : 'fail',
       last?.personaOk ? 'pass' : 'fail',
-      last?.factsOk ? 'pass' : 'fail',
+      gateColumn(last?.factsOk, last?.factCorrections),
       outcome.anchor.tier,
       outcome.anchor.ref,
       JSON.stringify(outcome.attempts),
       outcome.tier,
       outcome.escalated ? 1 : 0,
+      // Only a draft that passed every gate waits for approval. The approver
+      // treats 'pending' as "on the owner's phone", so a failed draft stored
+      // as pending could be published by a bare "d" for six hours.
+      outcome.ok ? 'pending' : 'rejected',
+      outcome.ok ? null : 'gates-failed',
       new Date().toISOString(),
     );
   return Number(info.lastInsertRowid);
+}
+
+function gateColumn(ok: boolean | undefined, corrections: string[] | undefined): string {
+  if (ok) return 'pass';
+  return corrections && corrections.length > 0 ? `fail: ${corrections.join(' | ')}` : 'fail';
+}
+
+/**
+ * Take a passed draft off the approval queue when it cannot be sent: no
+ * visual means no post, so it must never sit in 'pending'.
+ */
+export function withdrawDraft(db: Database.Database, draftId: number, reason: string): void {
+  db.prepare(
+    `UPDATE drafts SET status = 'rejected', reject_reason = ?, resolved_at = ? WHERE id = ? AND status = 'pending'`,
+  ).run(reason, new Date().toISOString(), draftId);
 }
 
 /** Anchor tiers of the most recently published posts, newest first. */

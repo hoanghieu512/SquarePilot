@@ -199,6 +199,19 @@ describe('composeDraft', () => {
     expect(out.body).not.toContain('$ENA');
   });
 
+  it('fails an attempt whose draft invents a figure, and feeds the figure back', async () => {
+    // Attempt 1 invents "70%"; the figure check fails it without a judge call.
+    // Attempt 2 drops it and passes tone and the fact judge.
+    const invented = GOOD.replace('Nobody noticed.', 'Nobody noticed 70% of it.');
+    const { client } = queueLlm([invented, PASS, GOOD, PASS, PASS]);
+    const out = await composeDraft(req(), { llm: client, recent: [] });
+
+    expect(out.attempts[0]!.factsOk).toBe(false);
+    expect(out.attempts[0]!.corrections.join(' ')).toContain('"70%" is not in the evidence');
+    expect(out.ok).toBe(true);
+    expect(out.attempts[1]!.factsOk).toBe(true);
+  });
+
   it('prepends the hashtag and reports both lengths', async () => {
     const { client } = queueLlm([GOOD, PASS]);
     const out = await composeDraft(req(), { llm: client, recent: [] });

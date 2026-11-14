@@ -78,7 +78,7 @@ export function createSquareClient(opts: SquareClientOptions): SquareClient {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const pollIntervalMs = opts.pollIntervalMs ?? 3000;
   const maxPolls = opts.maxPolls ?? 10;
-  const redact = (text: string): string => text.split(opts.apiKey).join('[redacted]');
+  const redact = (text: string): string => (opts.apiKey ? text.split(opts.apiKey).join('[redacted]') : text);
 
   async function post(endpoint: string, body: unknown, base = BASE_V2): Promise<Response> {
     try {
@@ -119,18 +119,25 @@ export function createSquareClient(opts: SquareClientOptions): SquareClient {
         throw new SquareError('/image/presignedUrl returned no presignedUrl or fileTicket');
       }
 
-      const put = await fetchImpl(presignedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'image/png' },
-        body: new Uint8Array(png),
-      });
+      // The presigned URL carries a signature in its query string: never let
+      // it into an error message, which can end up in the approval chat.
+      let put: Response;
+      try {
+        put = await fetchImpl(presignedUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'image/png' },
+          body: new Uint8Array(png),
+        });
+      } catch {
+        throw new SquareError('Image upload to the presigned URL failed (network error)');
+      }
       if (!put.ok) throw new SquareError(`Image upload failed: HTTP ${put.status}`);
 
       for (let i = 0; i < maxPolls; i++) {
         const status = await data(await post('/image/imageStatus', { fileTicket }), '/image/imageStatus');
         if (status.status === 1 && typeof status.imageUrl === 'string') return status.imageUrl;
         if (status.status === 2) {
-          throw new SquareError(`Image processing failed: ${String(status.failedReason ?? 'no reason')}`);
+          throw new SquareError(`Image processing failed: ${redact(String(status.failedReason ?? 'no reason'))}`);
         }
         await sleep(pollIntervalMs);
       }

@@ -12,7 +12,13 @@ import { recentModes, selectMode, type ModeChoice } from './compose/modes.js';
 import { runDataGate, type DataGateResult, type VisualSchema } from './compose/data-gate.js';
 import { alignVisualToDraft } from './compose/visual-alignment.js';
 import { loadVoiceAssets } from './compose/prompt-assets.js';
-import { composeDraft, recentAnchorTiers, recordDraft, type ComposeOutcome } from './compose/compose-draft.js';
+import {
+  composeDraft,
+  recentAnchorTiers,
+  recordDraft,
+  withdrawDraft,
+  type ComposeOutcome,
+} from './compose/compose-draft.js';
 import { readRecentPosts } from './compose/recent-posts.js';
 import { personaCapInUse } from './compose/persona-guard.js';
 import { pipelineFactsFor, resolveAnchor } from './compose/anchor.js';
@@ -176,6 +182,7 @@ export async function runUpToDraft(
   );
 
   if (!options.visualDir || !draft.ok || !chosen.dataGate?.ok) {
+    if (draft.ok) withdrawDraft(db, draftId, 'no-visual');
     return { candidates, chosen, draft, draftId };
   }
 
@@ -184,6 +191,7 @@ export async function runUpToDraft(
   });
   if (!aligned.ok) {
     logger.warn(`Visual skipped: ${aligned.reason}`);
+    withdrawDraft(db, draftId, 'no-visual');
     return { candidates, chosen, draft, draftId };
   }
   if (aligned.changed.length > 0) logger.info('Visual aligned to the draft', { changed: aligned.changed });

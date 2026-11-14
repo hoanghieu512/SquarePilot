@@ -30,12 +30,12 @@ export const KNOWN_COINS: readonly Coin[] = [
   { ticker: 'ETH', names: ['ETHEREUM', 'ETHER'] },
   { ticker: 'BNB', names: [] },
   { ticker: 'SOL', names: ['SOLANA'] },
-  { ticker: 'XRP', names: ['RIPPLE'] },
+  { ticker: 'XRP', names: [] },
   { ticker: 'DOGE', names: ['DOGECOIN'] },
   { ticker: 'ADA', names: ['CARDANO'] },
   { ticker: 'TON', names: ['TONCOIN'] },
   { ticker: 'TRX', names: ['TRON'] },
-  { ticker: 'AVAX', names: ['AVALANCHE'] },
+  { ticker: 'AVAX', names: [] },
   { ticker: 'LINK', names: ['CHAINLINK'] },
   { ticker: 'DOT', names: ['POLKADOT'] },
   { ticker: 'LTC', names: ['LITECOIN'] },
@@ -46,6 +46,14 @@ export const KNOWN_COINS: readonly Coin[] = [
   { ticker: 'USDT', names: ['TETHER'] },
   { ticker: 'USDC', names: [] },
 ];
+
+/**
+ * Tickers that are also everyday English words. Upper-casing a hashtag or a
+ * sentence turns "#GoldNearRecordHigh" or "traded near $2,700" into NEAR, so
+ * these count only when written in capitals in the original text ("#NEARBreaks",
+ * "NEAR rose"). Names that are common words (Ripple, Avalanche) are not names.
+ */
+const WORD_TICKERS = new Set(['NEAR', 'LINK', 'DOT', 'TON']);
 
 /**
  * Upper-case tokens that look like tickers but name no coin. Evidence is full
@@ -64,7 +72,7 @@ const UPPER_TOKEN_RE = /\b[A-Z][A-Z0-9]{1,9}\b/g;
 
 export interface CashtagContext {
   hashtag: string;
-  /** Evidence, perspective summary and guardrails: what the post may be about. */
+  /** Evidence and perspective summary: what the post may be about. */
   grounding: string[];
 }
 
@@ -76,26 +84,35 @@ export interface CashtagResult {
   added: string[];
 }
 
-function coinsNamedIn(words: Set<string>): string[] {
-  return KNOWN_COINS.filter((c) => words.has(c.ticker) || c.names.some((n) => words.has(n))).map(
-    (c) => c.ticker,
-  );
+/** Coins named by full name in a set of upper-cased words. Names only, never tickers. */
+function coinsByName(words: Set<string>): string[] {
+  return KNOWN_COINS.filter((c) => c.names.some((n) => words.has(n))).map((c) => c.ticker);
 }
 
 /** Coins the trending hashtag itself names, in KNOWN_COINS order. */
 export function hashtagCoins(hashtag: string): string[] {
   const words = new Set(hashtagToHeadline(hashtag).split(/[^A-Z0-9]+/).filter(Boolean));
-  return coinsNamedIn(words);
+  const raw = hashtag.replace(/^#/, '');
+  return KNOWN_COINS.filter((c) => {
+    if (c.names.some((n) => words.has(n))) return true;
+    if (!words.has(c.ticker)) return false;
+    // A word ticker must be written in capitals in the hashtag itself.
+    return !WORD_TICKERS.has(c.ticker) || new RegExp(`(?<![A-Z])${c.ticker}(?![a-z])`).test(raw);
+  }).map((c) => c.ticker);
 }
 
-/** Every ticker the post could legitimately be about. */
+/**
+ * Every ticker the post could legitimately be about: the hashtag's coins, and
+ * from the evidence only explicit cashtags, tickers written in capitals, and
+ * full coin names.
+ */
 export function groundedTickers(ctx: CashtagContext): Set<string> {
   const out = new Set<string>(hashtagCoins(ctx.hashtag));
   for (const text of ctx.grounding) {
     for (const m of text.matchAll(CASHTAG_RE)) out.add(m[1]!.toUpperCase());
     for (const m of text.matchAll(UPPER_TOKEN_RE)) out.add(m[0]);
     const words = new Set(text.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean));
-    for (const t of coinsNamedIn(words)) out.add(t);
+    for (const t of coinsByName(words)) out.add(t);
   }
   for (const t of NOT_COINS) out.delete(t);
   return out;

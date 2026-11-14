@@ -101,6 +101,21 @@ describe('uploadImage', () => {
   });
 });
 
+describe('uploadImage, secrets in errors', () => {
+  it('never puts the presigned URL in the error when the PUT fails at the network level', async () => {
+    const signed = 'https://s3.example/put?X-Amz-Signature=SECRETSIG';
+    const fn = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).startsWith('https://s3.example')) throw new Error(`connect ECONNRESET ${signed}`);
+      return json({ code: '000000', data: { presignedUrl: signed, fileTicket: 't1' } });
+    });
+    const client = createSquareClient({ apiKey: KEY, fetchImpl: fn as unknown as typeof fetch, sleep: noSleep });
+
+    const err = await client.uploadImage(Buffer.from([1]), 'c.png').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SquareError);
+    expect((err as Error).message).not.toContain('SECRETSIG');
+  });
+});
+
 describe('publishPost', () => {
   it('posts a short post with its images to the v1 endpoint', async () => {
     const { fetchImpl, calls } = fakeFetch({

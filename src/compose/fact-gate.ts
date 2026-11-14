@@ -1,4 +1,4 @@
-import type { LlmClient, Tier } from '../llm/client.js';
+import { LlmError, type LlmClient, type Tier } from '../llm/client.js';
 import type { DraftRequest } from './drafter.js';
 import { checkFigures } from './fact-figures.js';
 import { hashtagToHeadline } from './data-gate.js';
@@ -148,14 +148,29 @@ export async function runFactGate(
     return { ok: true, corrections: [], unsupportedFigures, usedModel: false };
   }
 
-  const result = await opts.llm.complete({
-    purpose: 'fact-gate',
-    tier: opts.tier ?? 'free',
-    draftId: opts.draftId,
-    temperature: 0,
-    system: JUDGE_SYSTEM,
-    user: buildJudgePrompt(draft, sources),
-  });
+  let result;
+  try {
+    result = await opts.llm.complete({
+      purpose: 'fact-gate',
+      tier: opts.tier ?? 'free',
+      draftId: opts.draftId,
+      temperature: 0,
+      system: JUDGE_SYSTEM,
+      user: buildJudgePrompt(draft, sources),
+    });
+  } catch (err) {
+    // A judge cut off at the token limit gave no verdict. That fails the
+    // attempt like an unreadable verdict, instead of crashing the whole run.
+    if (err instanceof LlmError && err.truncated) {
+      return {
+        ok: false,
+        corrections: ['The fact check ran out of tokens before giving a verdict. Rewrite and resubmit.'],
+        unsupportedFigures,
+        usedModel: true,
+      };
+    }
+    throw err;
+  }
 
   const parsed = parseVerdict(result.text);
   if (!parsed) {

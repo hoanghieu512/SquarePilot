@@ -14,9 +14,21 @@ const base: Partial<VisualSchema> = {
 const opts = { currentYear: 2026 };
 
 describe('alignVisualToDraft', () => {
-  it('keeps a focal number the draft states', () => {
-    const r = alignVisualToDraft(base, 'Price sits near $68,000 and 2.5% up on the month.', opts);
+  it('keeps a card exactly as is when the draft writes the same figures', () => {
+    const r = alignVisualToDraft(base, 'Price sits near $68k and 2.5% up on the month.', opts);
     expect(r).toEqual({ ok: true, schema: base, changed: [] });
+  });
+
+  it("writes the card's figures the way the draft writes them", () => {
+    // Card from a top post says 2.47%, the draft rounds to 2.5%: same figure, the
+    // card must show the draft's version. And the other direction for $68k.
+    const r = alignVisualToDraft(
+      { focal_number: '2.47%', stat_tiles: [{ label: 'cited', value: '$68k' }] },
+      'Up 2.5% on the month, with price at $68,214.',
+      opts,
+    );
+    expect(r.ok && r.schema.focal_number).toBe('2.5%');
+    expect(r.ok && r.schema.stat_tiles).toEqual([{ label: 'cited', value: '$68,214' }]);
   });
 
   it('replaces a focal number the draft never states with a figure from the draft', () => {
@@ -37,16 +49,19 @@ describe('alignVisualToDraft', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.schema.stat_tiles?.map((t) => t.label)).toEqual(['views', 'posts']);
-    expect(r.changed).toEqual(['dropped 1 cited tile(s) not stated in the draft']);
+    expect(r.changed).toEqual(['dropped cited tile 2.5%: not stated in the draft']);
   });
 
-  it('refuses when the draft has no figure that fits the panel', () => {
-    const r = alignVisualToDraft(base, 'Nobody knows where this goes.', opts);
-    expect(r.ok).toBe(false);
+  it('refuses when the draft has no figure at all', () => {
+    expect(alignVisualToDraft(base, 'Nobody knows where this goes.', opts).ok).toBe(false);
+  });
+
+  it('refuses when the only figure in the draft is too long for the panel', () => {
+    // 13 characters, over the 12-character focal cap.
+    expect(alignVisualToDraft(base, 'Supply hit 1,234,567,890.', opts).ok).toBe(false);
   });
 
   it('does not take the current year as the focal number', () => {
-    const r = alignVisualToDraft(base, 'The 2026 outlook is unclear.', opts);
-    expect(r.ok).toBe(false);
+    expect(alignVisualToDraft(base, 'The 2026 outlook is unclear.', opts).ok).toBe(false);
   });
 });
