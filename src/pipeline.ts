@@ -10,6 +10,7 @@ import { gatherAll } from './perspective/evidence.js';
 import type { SelectionResult } from './perspective/types.js';
 import { recentModes, selectMode, type ModeChoice } from './compose/modes.js';
 import { runDataGate, type DataGateResult, type VisualSchema } from './compose/data-gate.js';
+import { alignVisualToDraft } from './compose/visual-alignment.js';
 import { loadVoiceAssets } from './compose/prompt-assets.js';
 import { composeDraft, recentAnchorTiers, recordDraft, type ComposeOutcome } from './compose/compose-draft.js';
 import { readRecentPosts } from './compose/recent-posts.js';
@@ -178,6 +179,16 @@ export async function runUpToDraft(
     return { candidates, chosen, draft, draftId };
   }
 
+  const aligned = alignVisualToDraft(chosen.dataGate.available, draft.body, {
+    currentYear: new Date().getUTCFullYear(),
+  });
+  if (!aligned.ok) {
+    logger.warn(`Visual skipped: ${aligned.reason}`);
+    return { candidates, chosen, draft, draftId };
+  }
+  if (aligned.changed.length > 0) logger.info('Visual aligned to the draft', { changed: aligned.changed });
+  const schema = aligned.schema;
+
   // "No image, no post" - the data gate already proved the schema can be filled,
   // so a failure here is a rendering fault, not a missing-content one.
   const slug = chosen.trend.hashtag.replace(/^#/, '').toLowerCase().slice(0, 48);
@@ -186,15 +197,15 @@ export async function runUpToDraft(
     `${new Date().toISOString().slice(0, 10)}-${slug}.png`,
   );
 
-  const rendered = await renderToFile(chosen.dataGate.available as VisualSchema, pngPath);
+  const rendered = await renderToFile(schema as VisualSchema, pngPath);
   db.prepare(
     `INSERT INTO visuals (draft_id, visual_type, mood, schema_json, png_path, bytes, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     draftId,
-    chosen.dataGate.available.visual_type ?? 'macro_card',
-    chosen.dataGate.available.mood_variant ?? 'neutral',
-    JSON.stringify(chosen.dataGate.available),
+    schema.visual_type ?? 'macro_card',
+    schema.mood_variant ?? 'neutral',
+    JSON.stringify(schema),
     pngPath,
     rendered.bytes,
     new Date().toISOString(),

@@ -7,6 +7,8 @@ import { checkPersona } from './persona-guard.js';
 import type { RecentPost } from './recent-posts.js';
 import type { AnchorAssignment, AnchorTier } from './anchor.js';
 import { composePost, type Lengths } from './text-validation.js';
+import { normalizeCashtags } from './cashtags.js';
+import { factSourcesFrom, runFactGate } from './fact-gate.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('compose');
@@ -20,6 +22,8 @@ export interface ComposeOptions {
   recent?: RecentPost[];
   /** Attempts before giving up. Attempt 2 onward escalates to the paid model. */
   maxAttempts?: number;
+  /** Clock for the fact gate's current-year allowance. */
+  now?: () => Date;
 }
 
 export interface GateOutcome {
@@ -28,6 +32,8 @@ export interface GateOutcome {
   toneOk: boolean;
   shapeOk: boolean;
   personaOk: boolean;
+  /** Figures and claims are backed by the sources (see `fact-gate.ts`). */
+  factsOk: boolean;
   /** Set when the drafter call hit the token limit; no gate ran for this attempt. */
   truncated?: true;
   corrections: string[];
@@ -47,12 +53,13 @@ export interface ComposeOutcome {
 }
 
 /**
- * Draft, then hold it against three gates, then rewrite with what failed.
+ * Draft, then hold it against four gates, then rewrite with what failed.
  *
  * The gates answer different questions and none subsumes another. Tone asks
  * whether it sounds like the author; shape asks whether it is built like the
- * last few posts; persona asks whether it leans on the job title again. A draft
- * can pass any two and still be wrong.
+ * last few posts; persona asks whether it leans on the job title again; facts
+ * asks whether every figure and claim comes from the sources. A draft can pass
+ * any three and still be wrong.
  *
  * Corrections are fed back verbatim. Telling a model to "try again" reproduces
  * the same draft; telling it "seven paragraphs, move the judgement to the end,
@@ -94,6 +101,7 @@ export async function composeDraft(
         toneOk: false,
         shapeOk: false,
         personaOk: false,
+        factsOk: false,
         truncated: true,
         corrections: [TRUNCATED_CORRECTION],
       });
@@ -102,7 +110,15 @@ export async function composeDraft(
       continue;
     }
 
-    const composed = composePost(result.text.trim(), req.trend.hashtag);
+    const tagged = normalizeCashtags(result.text.trim(), {
+      hashtag: req.trend.hashtag,
+      grounding: [req.perspective.summary, ...req.perspective.evidence, ...req.perspective.guardrails],
+    });
+    if (tagged.removed.length > 0 || tagged.added.length > 0) {
+      logger.info('Cashtags adjusted', { removed: tagged.removed, added: tagged.added });
+    }
+
+    const composed = composePost(tagged.text, req.trend.hashtag);
     lastBody = composed.body;
     lastLengths = composed.lengths;
 
@@ -114,11 +130,20 @@ export async function composeDraft(
     });
     const shape = checkShape(composed.body, recentShapes);
     const persona = checkPersona(composed.body, recentPersona);
+    // The figure check is code and always runs. The claim judge costs a call,
+    // so like the tone judge it is skipped when the draft is going back anyway.
+    const facts = await runFactGate(composed.body, factSourcesFrom(req), {
+      llm: opts.llm,
+      tier: 'free',
+      currentYear: (opts.now?.() ?? new Date()).getUTCFullYear(),
+      judge: tone.ok && shape.ok && persona.ok,
+    });
 
     const next = [
       ...tone.corrections,
       ...(shape.ok ? [] : [shape.reason!, ...shape.constraints]),
       ...(persona.ok ? [] : [persona.reason!]),
+      ...facts.corrections,
     ];
 
     attempts.push({
@@ -127,10 +152,11 @@ export async function composeDraft(
       toneOk: tone.ok,
       shapeOk: shape.ok,
       personaOk: persona.ok,
+      factsOk: facts.ok,
       corrections: next,
     });
 
-    if (tone.ok && shape.ok && persona.ok) {
+    if (tone.ok && shape.ok && persona.ok && facts.ok) {
       logger.info(`Draft passed on attempt ${attempt} (${tier})`);
       return {
         ok: true,
@@ -147,6 +173,7 @@ export async function composeDraft(
       tone: tone.ok,
       shape: shape.ok,
       persona: persona.ok,
+      facts: facts.ok,
     });
     corrections = next;
   }
@@ -173,8 +200,8 @@ export function recordDraft(
     .prepare(
       `INSERT INTO drafts
          (selection_id, body, nfc_len, nfd_len, shape_vector, tone_gate, shape_gate, persona_gate,
-          anchor_tier, anchor_ref, attempts_json, model_used, escalated, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          fact_gate, anchor_tier, anchor_ref, attempts_json, model_used, escalated, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
     )
     .run(
       selectionId,
@@ -185,6 +212,7 @@ export function recordDraft(
       last?.toneOk ? 'pass' : `fail: ${last?.corrections.join(' | ') ?? 'unknown'}`,
       last?.shapeOk ? 'pass' : 'fail',
       last?.personaOk ? 'pass' : 'fail',
+      last?.factsOk ? 'pass' : 'fail',
       outcome.anchor.tier,
       outcome.anchor.ref,
       JSON.stringify(outcome.attempts),

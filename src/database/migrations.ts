@@ -159,6 +159,16 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE drafts ADD COLUMN attempts_json TEXT;
     `,
   },
+  {
+    version: 3,
+    name: 'draft_fact_gate',
+    sql: `
+      -- The fact gate (figures and claims checked against the sources) joined
+      -- tone, shape and persona after a draft passed all three with invented
+      -- facts. Same format as tone_gate: 'pass' or 'fail: <corrections>'.
+      ALTER TABLE drafts ADD COLUMN fact_gate TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

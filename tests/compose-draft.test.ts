@@ -139,6 +139,10 @@ describe('buildPrompt', () => {
     expect(p).toMatch(/Breaking one fails the post/);
   });
 
+  it('asks for cashtags only on the coins the post is about', () => {
+    expect(buildPrompt(req())).toMatch(/### Cashtags[\s\S]*at most 3/);
+  });
+
   it('tells the model not to write the hashtag itself', () => {
     expect(buildPrompt(req())).toMatch(/Do not include the hashtag/);
   });
@@ -185,6 +189,14 @@ describe('composeDraft', () => {
     expect(out.ok).toBe(true);
     expect(out.tier).toBe('free');
     expect(out.escalated).toBe(false);
+  });
+
+  it('strips a cashtag nothing grounds before the gates see the body', async () => {
+    const { client } = queueLlm([GOOD.replace('Nobody noticed.', 'Nobody noticed $ENA.'), PASS]);
+    const out = await composeDraft(req(), { llm: client, recent: [] });
+
+    expect(out.body).toContain('Nobody noticed ENA.');
+    expect(out.body).not.toContain('$ENA');
   });
 
   it('prepends the hashtag and reports both lengths', async () => {

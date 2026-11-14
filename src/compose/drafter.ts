@@ -6,6 +6,7 @@ import { constraintsAsInstructions } from './modes.js';
 import type { VoiceAssets } from './prompt-assets.js';
 import { anchorInstructions, type AnchorAssignment } from './anchor.js';
 import { TARGET_NFC } from './text-validation.js';
+import { cashtagInstructions } from './cashtags.js';
 
 export interface DraftRequest {
   trend: Trend;
@@ -78,6 +79,8 @@ export function buildPrompt(req: DraftRequest): string {
   parts.push(anchorInstructions(req.anchor));
 
   parts.push('### Form\n\n' + constraintsAsInstructions(mode).map((c) => `- ${c}`).join('\n'));
+
+  parts.push(cashtagInstructions(trend.hashtag));
 
   parts.push(
     '### Length\n\n' +
