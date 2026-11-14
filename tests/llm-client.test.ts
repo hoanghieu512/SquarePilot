@@ -104,6 +104,76 @@ describe('LlmClient', () => {
     expect(row.ok).toBe(0);
   });
 
+  describe('truncation observability', () => {
+    const usage = { prompt_tokens: 1200, completion_tokens: 4096, cost: 0.05 };
+    const longContent = `Draft one...\n\n${'Self-check table | col   a | col\tb\n'.repeat(30)}`;
+
+    function truncatedFetch(message: Record<string, unknown>) {
+      const fetchMock = vi.fn(async () =>
+        jsonResponse({ choices: [{ message, finish_reason: 'length' }], usage }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    function row() {
+      return db.prepare('SELECT * FROM llm_calls').get() as {
+        ok: number;
+        prompt_tokens: number;
+        output_tokens: number;
+        cost_usd: number;
+        error: string;
+      };
+    }
+
+    it('keeps usage and a collapsed 400 char excerpt in the row, not in the message', async () => {
+      const fetchMock = truncatedFetch({ content: longContent });
+      const retrying = new LlmClient({
+        apiKey: 'sk-or-test',
+        modelFree: 'vendor/model:free',
+        modelPaid: 'vendor/model-paid',
+        db,
+        maxAttempts: 3,
+        sleep: async () => {},
+      });
+
+      const err = await retrying.complete({ purpose: 'draft', user: 'hi' }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(LlmError);
+      expect((err as LlmError).truncated).toBe(true);
+      expect((err as LlmError).retryable).toBe(false);
+      expect((err as LlmError).message).not.toContain('excerpt');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      const r = row();
+      expect(r.ok).toBe(0);
+      expect(r.prompt_tokens).toBe(1200);
+      expect(r.output_tokens).toBe(4096);
+      expect(r.cost_usd).toBe(0.05);
+      const expected = longContent.replace(/\s+/g, ' ').slice(0, 400);
+      expect(expected).toHaveLength(400);
+      expect(r.error.endsWith(` | excerpt: ${expected}`)).toBe(true);
+    });
+
+    it('falls back to the reasoning excerpt when content is empty', async () => {
+      truncatedFetch({ content: '', reasoning: 'Let me\n\nthink   about it' });
+      await expect(client.complete({ purpose: 'draft', user: 'hi' })).rejects.toThrow(LlmError);
+      expect(row().error.endsWith(' | reasoning excerpt: Let me think about it')).toBe(true);
+    });
+
+    it('adds no suffix when there is no text at all', async () => {
+      truncatedFetch({});
+      await expect(client.complete({ purpose: 'draft', user: 'hi' })).rejects.toThrow(LlmError);
+      expect(row().error).not.toContain('excerpt');
+    });
+
+    it('leaves truncated false on other errors', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: { message: 'nope' } }, 404)));
+      const err = await client.complete({ purpose: 'draft', user: 'hi' }).catch((e: unknown) => e);
+      expect((err as LlmError).truncated).toBe(false);
+    });
+  });
+
   it('treats an empty completion as a failure rather than an empty draft', async () => {
     vi.stubGlobal(
       'fetch',

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { LlmClient, Tier } from '../llm/client.js';
+import { LlmError, type LlmClient, type Tier } from '../llm/client.js';
 import { DRAFTER_SYSTEM, buildPrompt, type DraftRequest } from './drafter.js';
 import { runToneGate } from './tone-gate.js';
 import { checkShape } from './shape-scorer.js';
@@ -28,8 +28,13 @@ export interface GateOutcome {
   toneOk: boolean;
   shapeOk: boolean;
   personaOk: boolean;
+  /** Set when the drafter call hit the token limit; no gate ran for this attempt. */
+  truncated?: true;
   corrections: string[];
 }
+
+export const TRUNCATED_CORRECTION =
+  'Your previous output ran past the length budget and was cut off. Output the post body only, with no analysis, no self-check, no alternatives and no commentary.';
 
 export interface ComposeOutcome {
   ok: boolean;
@@ -72,13 +77,30 @@ export async function composeDraft(
     // so paying on attempt one would destroy the measurement.
     const tier: Tier = attempt === 1 ? 'free' : 'paid';
 
-    const result = await opts.llm.complete({
-      purpose: 'draft',
-      tier,
-      temperature: 0.85,
-      system: DRAFTER_SYSTEM,
-      user: buildPrompt({ ...req, corrections }),
-    });
+    let result;
+    try {
+      result = await opts.llm.complete({
+        purpose: 'draft',
+        tier,
+        temperature: 0.85,
+        system: DRAFTER_SYSTEM,
+        user: buildPrompt({ ...req, corrections }),
+      });
+    } catch (err) {
+      if (!(err instanceof LlmError) || !err.truncated) throw err;
+      attempts.push({
+        attempt,
+        tier,
+        toneOk: false,
+        shapeOk: false,
+        personaOk: false,
+        truncated: true,
+        corrections: [TRUNCATED_CORRECTION],
+      });
+      logger.warn(`Attempt ${attempt} (${tier}) was truncated by the token limit`);
+      corrections = [TRUNCATED_CORRECTION];
+      continue;
+    }
 
     const composed = composePost(result.text.trim(), req.trend.hashtag);
     lastBody = composed.body;

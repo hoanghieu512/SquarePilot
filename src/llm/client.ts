@@ -79,6 +79,8 @@ export class LlmError extends Error {
     message: string,
     readonly retryable: boolean,
     readonly status?: number,
+    /** True when the provider stopped at the token limit (finish_reason "length"). */
+    readonly truncated: boolean = false,
   ) {
     super(message);
     this.name = 'LlmError';
@@ -174,10 +176,31 @@ export class LlmClient {
 
     if (choice?.finish_reason === 'length') {
       const message = `Model ${model} hit the token limit before finishing — output is truncated and may be leaked reasoning`;
-      this.record({ draftId: args.draftId, purpose: args.purpose, model, ok: false, error: message });
+      const collapse = (s: string) => (s.trim() === '' ? '' : s.replace(/\s+/g, ' ').slice(0, 400));
+      const content = collapse(
+        typeof choice.message?.content === 'string' ? choice.message.content : '',
+      );
+      const reasoning = collapse(
+        typeof choice.message?.reasoning === 'string' ? choice.message.reasoning : '',
+      );
+      const suffix = content
+        ? ` | excerpt: ${content}`
+        : reasoning
+          ? ` | reasoning excerpt: ${reasoning}`
+          : '';
+      this.record({
+        draftId: args.draftId,
+        purpose: args.purpose,
+        model,
+        ok: false,
+        promptTokens: raw.usage?.prompt_tokens ?? 0,
+        outputTokens: raw.usage?.completion_tokens ?? 0,
+        costUsd: raw.usage?.cost ?? 0,
+        error: message + suffix,
+      });
       // Deterministic: the same prompt will truncate again. Retrying only
-      // burns free-tier slots. The caller must raise maxTokens instead.
-      throw new LlmError(message, false);
+      // burns free-tier slots. The caller handles it as a failed attempt.
+      throw new LlmError(message, false, undefined, true);
     }
 
     const text = choice?.message?.content;

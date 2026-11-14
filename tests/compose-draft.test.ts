@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LlmClient } from '../src/llm/client.js';
-import { composeDraft } from '../src/compose/compose-draft.js';
+import { LlmClient, LlmError } from '../src/llm/client.js';
+import { composeDraft, TRUNCATED_CORRECTION } from '../src/compose/compose-draft.js';
 import { MODE_SPECS } from '../src/compose/modes.js';
 import { buildPrompt } from '../src/compose/drafter.js';
 import type { VoiceAssets } from '../src/compose/prompt-assets.js';
@@ -288,6 +288,63 @@ describe('composeDraft', () => {
     // Call 1 is the draft, call 2 the judge.
     const init = fetchMock.mock.calls[1]![1] as RequestInit;
     expect(String(init.body)).toContain('Anchor assigned to this post');
+  });
+
+  describe('truncated drafter call', () => {
+    type Args = { purpose: string; user: string };
+    function fakeLlm(draftSteps: ('truncate' | 'plain-error' | 'ok')[]): {
+      llm: LlmClient;
+      drafts: string[];
+    } {
+      const drafts: string[] = [];
+      let d = 0;
+      const llm = {
+        complete: vi.fn(async (args: Args) => {
+          if (args.purpose === 'draft') {
+            drafts.push(args.user);
+            const step = draftSteps[Math.min(d, draftSteps.length - 1)]!;
+            d++;
+            if (step === 'truncate') throw new LlmError('truncated', false, undefined, true);
+            if (step === 'plain-error') throw new LlmError('boom', false);
+            return { text: GOOD };
+          }
+          return { text: PASS };
+        }),
+      } as unknown as LlmClient;
+      return { llm, drafts };
+    }
+
+    it('counts it as one failed attempt and continues on the paid tier', async () => {
+      const { llm, drafts } = fakeLlm(['truncate', 'ok']);
+      const out = await composeDraft(req(), { llm, recent: [], maxAttempts: 2 });
+
+      expect(out.ok).toBe(true);
+      expect(out.attempts).toHaveLength(2);
+      const a = out.attempts[0]!;
+      expect(a.truncated).toBe(true);
+      expect(a.toneOk).toBe(false);
+      expect(a.shapeOk).toBe(false);
+      expect(a.personaOk).toBe(false);
+      expect(a.corrections).toEqual([TRUNCATED_CORRECTION]);
+      expect(a.tier).toBe('free');
+      expect(out.attempts[1]!.tier).toBe('paid');
+      expect(drafts[1]).toContain(TRUNCATED_CORRECTION);
+    });
+
+    it('returns ok=false without throwing when every attempt is truncated', async () => {
+      const { llm } = fakeLlm(['truncate']);
+      const out = await composeDraft(req(), { llm, recent: [], maxAttempts: 3 });
+
+      expect(out.ok).toBe(false);
+      expect(out.body).toBe('');
+      expect(out.attempts).toHaveLength(3);
+      expect(out.attempts.every((a) => a.truncated === true)).toBe(true);
+    });
+
+    it('still propagates a non-truncated LlmError', async () => {
+      const { llm } = fakeLlm(['plain-error']);
+      await expect(composeDraft(req(), { llm, recent: [] })).rejects.toThrow('boom');
+    });
   });
 
   it('records which gate failed on each attempt', async () => {
