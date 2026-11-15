@@ -49,6 +49,11 @@ export interface PublishOutcome {
   shareLink: string | null;
   /** One line for the approval chat. */
   note: string;
+  /** False when the post is live but its posts row could not be written. */
+  recorded: boolean;
+  publishedAt: string;
+  /** Exactly what was posted. */
+  body: string;
 }
 
 interface DraftForPublish {
@@ -107,8 +112,9 @@ export async function publishDraft(deps: PublisherDeps, draftId: number): Promis
       ? 'Square answered 504: the post is live but came back without an id'
       : (shareLink ?? `post id ${squarePostId ?? 'unknown'}`);
 
+  const at = deps.now();
+  const live = { squarePostId, shareLink, publishedAt: at.toISOString(), body: draft.body };
   try {
-    const at = deps.now();
     deps.db.transaction(() => {
       deps.db
         .prepare(
@@ -124,9 +130,9 @@ export async function publishDraft(deps: PublisherDeps, draftId: number): Promis
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     logger.error('Published, but the post was not recorded', { draftId, squarePostId, reason });
-    return { squarePostId, shareLink, note: `${note}. Not recorded in the database: ${reason}` };
+    return { ...live, recorded: false, note: `${note}. Not recorded in the database: ${reason}` };
   }
 
   logger.info('Published', { draftId, squarePostId });
-  return { squarePostId, shareLink, note };
+  return { ...live, recorded: true, note };
 }

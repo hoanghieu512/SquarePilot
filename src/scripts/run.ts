@@ -105,8 +105,10 @@ async function main(): Promise<void> {
         [draftId],
       );
       logger.info(`Session over (${summary.reason}): ${summary.drafts.map((d) => `${d.code} ${d.status}`).join(', ')}`);
-      // Offered and not published: kept for the approval-rate stats.
-      for (const d of summary.drafts.filter((x) => x.status !== 'approved')) {
+      // Offered and not published, including an approved draft whose publish
+      // result was unclear: kept for the approval-rate stats.
+      const hasPost = db.prepare('SELECT 1 FROM posts WHERE draft_id = ?');
+      for (const d of summary.drafts.filter((x) => hasPost.get(x.id) === undefined)) {
         try {
           writeUnpublishedDraft(db, d.id, { vaultDir: config.vaultDir, now: now(), modelFor });
         } catch (err) {

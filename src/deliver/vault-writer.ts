@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import type { VisualSchema } from '../compose/data-gate.js';
 import { HARD_CAP_NFD } from '../compose/text-validation.js';
 import { latestOfferedVisual } from '../visual/draft-visual.js';
+import { vietnamDate } from '../compose/recent-posts.js';
 
 /**
  * Copy what the bot published into the vault, next to the hand-written posts.
@@ -71,9 +72,7 @@ function loadDraft(db: Database.Database, draftId: number): DraftRow {
 }
 
 /** `YYYY-MM-DD` in Vietnam, the date the vault's file names use. */
-export function vaultDate(at: Date): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(at);
-}
+export const vaultDate = vietnamDate;
 
 /** "#WhatWillDriveCryptoandStocks’NextRebound?" → "what-will-drive-cryptoand-stocks-next". */
 export function postSlug(hashtag: string, maxWords = 6): string {
@@ -163,13 +162,27 @@ interface PostRow {
 export function writePublishedPost(
   db: Database.Database,
   draftId: number,
-  opts: { vaultDir: string; modelFor(tier: string): string },
+  opts: {
+    vaultDir: string;
+    modelFor(tier: string): string;
+    /** What the publisher knows of the live post, when its posts row could not be written. */
+    live?: { squarePostId: string | null; shareLink: string | null; publishedAt: string; body: string };
+  },
 ): VaultWriteResult {
-  const post = db
+  const row = db
     .prepare(
       'SELECT id, square_post_id, content_snapshot, share_link, published_at FROM posts WHERE draft_id = ?',
     )
     .get(draftId) as PostRow | undefined;
+  const post: PostRow | undefined =
+    row ??
+    (opts.live && {
+      id: -1,
+      square_post_id: opts.live.squarePostId,
+      content_snapshot: opts.live.body,
+      share_link: opts.live.shareLink,
+      published_at: opts.live.publishedAt,
+    });
   if (!post) throw new Error(`draft ${draftId} has no post to write`);
   const d = loadDraft(db, draftId);
   const date = vaultDate(new Date(post.published_at));
@@ -229,53 +242,99 @@ export function writePublishedPost(
     '## Nguồn',
     post.share_link
       ? `- Binance Square: ${post.share_link}`
-      : `- Binance Square post id: ${post.square_post_id ?? 'none returned (HTTP 504, the post is live)'}`,
+      : `- Binance Square post id: ${post.square_post_id ?? 'none returned'}`,
   ];
 
   // The body exactly as published, so the vault copy matches the snapshot.
   const md = [...front, '', ...header, '', post.content_snapshot, '', '---', '', ...sources, ''].join('\n');
   const mdPath = path.join(squareDir, freeName(squareDir, `${date}-${slug}-square-post`, '.md'));
   fs.writeFileSync(mdPath, md, { flag: 'wx' });
-  db.prepare('UPDATE posts SET md_path = ?, png_path = COALESCE(?, png_path) WHERE id = ?').run(
-    mdPath,
-    pngPath,
-    post.id,
-  );
+  if (row) {
+    db.prepare('UPDATE posts SET md_path = ?, png_path = COALESCE(?, png_path) WHERE id = ?').run(
+      mdPath,
+      pngPath,
+      row.id,
+    );
+  }
 
-  if (d.outcome === 'angle' && d.source_ref) notes.push(markAnglePosted(db, d.source_ref, date));
+  if (d.outcome === 'angle' && d.source_ref) notes.push(markAnglePosted(db, d.source_ref, date, opts.vaultDir));
   if (d.anchor_tier === 'bank' && d.anchor_ref) {
     notes.push(markBankAnchorUsed(path.join(opts.vaultDir, 'anchor-bank.md'), d.anchor_ref, date));
   }
   return { mdPath, pngPath, notes };
 }
 
-/** Set `status: posted` in the angle's frontmatter, as the hand pipeline does. */
-export function markAnglePosted(db: Database.Database, anglePath: string, date: string): string {
-  if (!fs.existsSync(anglePath)) return `angle file missing, not marked: ${path.basename(anglePath)}`;
-  const raw = fs.readFileSync(anglePath, 'utf8');
-  const fm = raw.match(/^---\n([\s\S]*?)\n---\n/);
-  if (!fm) return `angle has no frontmatter, not marked: ${path.basename(anglePath)}`;
-  const front = /^status:.*$/m.test(fm[1]!) ? fm[1]!.replace(/^status:.*$/m, 'status: posted') : `${fm[1]}\nstatus: posted`;
-  fs.writeFileSync(anglePath, `---\n${front}\n---\n${raw.slice(fm[0].length)}`);
+/**
+ * Set `status: posted` in the angle's frontmatter, as the hand pipeline does.
+ *
+ * The note is looked up by name under this vault's `angles/`, never at the
+ * path the database remembers, which can point into another vault. The
+ * database row is marked either way, so the angle is not offered again.
+ */
+export function markAnglePosted(db: Database.Database, anglePath: string, date: string, vaultDir: string): string {
   db.prepare(`UPDATE angles SET status = 'posted', used_at = ? WHERE path = ?`).run(date, anglePath);
-  return `angle marked posted: ${path.basename(anglePath)}`;
+  const name = path.basename(anglePath);
+  const file = path.join(vaultDir, 'angles', name);
+  if (!fs.existsSync(file)) return `angle file missing, marked posted in the database only: ${name}`;
+
+  const raw = fs.readFileSync(file, 'utf8');
+  const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+  // The first line that is only "---" closes the frontmatter; a rule further
+  // down the body is never reached.
+  const fm = raw.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/);
+  if (!fm) return `angle has no frontmatter, marked posted in the database only: ${name}`;
+  const inner = fm[1]!;
+  const status = /^status:[^\r\n]*/m;
+  const updated = status.test(inner) ? inner.replace(status, 'status: posted') : `${inner}${eol}status: posted`;
+  fs.writeFileSync(file, `---${eol}${updated}${eol}---${fm[2]}${raw.slice(fm[0].length)}`);
+  return `angle marked posted: ${name}`;
 }
 
-/** Set `used: true` and `last_used` on one anchor of the bank, leaving the rest of the file as it is. */
+/** The anchor headings exactly as `parseAnchorBank` reads them. */
+const ANCHOR_HEADING = /^## (A\d+)\s*-\s*(.+)$/gm;
+
+/**
+ * Set `used: true` and `last_used` on one anchor of the bank, adding either
+ * bullet if the anchor lacks it, and leaving the rest of the file as it is.
+ * The cooldown reads `last_used`, so a used anchor must always carry it.
+ */
 export function markBankAnchorUsed(bankPath: string, anchorId: string, date: string): string {
   if (!fs.existsSync(bankPath)) return `anchor bank missing, ${anchorId} not marked`;
   const raw = fs.readFileSync(bankPath, 'utf8');
-  const head = new RegExp(`^## ${anchorId}\\s*-.*$`, 'm').exec(raw);
-  if (!head) return `anchor ${anchorId} not found in the bank, not marked`;
-  const start = head.index;
-  const next = raw.slice(start + head[0].length).search(/^## /m);
-  const end = next === -1 ? raw.length : start + head[0].length + next;
-  const section = raw
-    .slice(start, end)
-    .replace(/^- \*\*used:\*\*.*$/m, '- **used:** true')
-    .replace(/^- \*\*last_used:\*\*.*$/m, `- **last_used:** ${date}`);
+  const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+  const heads = [...raw.matchAll(ANCHOR_HEADING)];
+  const at = heads.findIndex((h) => h[1] === anchorId);
+  if (at === -1) return `anchor ${anchorId} not found in the bank, not marked`;
+  const start = heads[at]!.index;
+  const end = at + 1 < heads.length ? heads[at + 1]!.index : raw.length;
+
+  let section = raw.slice(start, end);
+  const setBullet = (name: string, value: string): void => {
+    const line = `- **${name}:** ${value}`;
+    const existing = new RegExp(`^- \\*\\*${name}:\\*\\*[^\\r\\n]*`, 'm');
+    if (existing.test(section)) {
+      section = section.replace(existing, line);
+      return;
+    }
+    const bullets = [...section.matchAll(/^- \*\*[a-z_]+:\*\*[^\r\n]*/gm)];
+    const last = bullets[bullets.length - 1];
+    const headingEnd = section.search(/\r?\n/);
+    const pos = last ? last.index + last[0].length : headingEnd === -1 ? section.length : headingEnd;
+    section = `${section.slice(0, pos)}${eol}${line}${section.slice(pos)}`;
+  };
+  setBullet('used', 'true');
+  setBullet('last_used', date);
+
   fs.writeFileSync(bankPath, raw.slice(0, start) + section + raw.slice(end));
   return `anchor ${anchorId} marked used on ${date}`;
+}
+
+function unpublishedReason(d: DraftRow): string {
+  if (d.reject_reason) return d.reject_reason;
+  if (d.status === 'expired') return 'expired';
+  // Approved with no post: the publisher could not tell whether it went out.
+  if (d.status === 'approved') return 'none, publish result unknown (Square did not answer clearly)';
+  return 'n/a';
 }
 
 /**
@@ -298,7 +357,7 @@ export function writeUnpublishedDraft(
     'pipeline: square-pilot',
     `draft_id: ${d.id}`,
     `status: ${d.status}`,
-    `rejected_reason: ${d.reject_reason ?? (d.status === 'expired' ? 'expired' : 'n/a')}`,
+    `rejected_reason: ${unpublishedReason(d)}`,
     `source: ${source}`,
     `angle_used: ${yamlString(d.perspective_summary ?? d.source_ref ?? '')}`,
     `input_source: ${d.outcome}`,

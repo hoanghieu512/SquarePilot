@@ -157,7 +157,7 @@ describe('publishPost', () => {
     const cases: [Response | Error, boolean][] = [
       [new Response('<html>Bad Gateway</html>', { status: 502 }), true],
       [new Error('socket hang up'), true],
-      [json({ code: '220003', message: 'content rejected' }), false],
+      [json({ code: '20002', message: 'sensitive words' }), false],
     ];
     for (const [answer, ambiguous] of cases) {
       const fetchImpl = vi.fn(async () => {
@@ -194,6 +194,47 @@ describe('publishPost', () => {
       expect(err).toBeInstanceOf(SquareError);
       expect((err as SquareError).ambiguous).toBe(true);
     }
+  });
+
+  it('reads an unexpected envelope as ambiguous instead of crashing on it', async () => {
+    // Audit 2026-11-15: JSON null and a non-string message threw a TypeError,
+    // which is not a SquareError, so the approver put the draft back on the queue.
+    for (const answer of [
+      new Response('null', { status: 200 }),
+      json({ code: '500', message: { detail: 'busy' } }, 200),
+    ]) {
+      const fetchImpl = vi.fn(async () => answer) as unknown as typeof fetch;
+      const client = createSquareClient({ apiKey: KEY, fetchImpl, sleep: noSleep });
+      const err = await client.publishPost({ body: 'x', imageUrls: [] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SquareError);
+      expect((err as SquareError).ambiguous).toBe(true);
+    }
+  });
+
+  it('treats only the known rejection codes of /content/add as definite', async () => {
+    const cases: [string, boolean][] = [
+      ['20002', false],
+      ['20022', false],
+      ['220009', false],
+      ['100001', true],
+      ['220003', true],
+    ];
+    for (const [code, ambiguous] of cases) {
+      const fetchImpl = vi.fn(async () => json({ code, message: 'no' }, 200)) as unknown as typeof fetch;
+      const client = createSquareClient({ apiKey: KEY, fetchImpl, sleep: noSleep });
+      const err = await client.publishPost({ body: 'x', imageUrls: [] }).catch((e: unknown) => e);
+      expect((err as SquareError).ambiguous, code).toBe(ambiguous);
+    }
+  });
+
+  it('reads an empty post id as no id', async () => {
+    const { fetchImpl } = fakeFetch({ '/content/add': [json({ code: '000000', data: { id: '' } })] });
+    const client = createSquareClient({ apiKey: KEY, fetchImpl, sleep: noSleep });
+    await expect(client.publishPost({ body: 'x', imageUrls: [] })).resolves.toEqual({
+      status: 'published',
+      id: null,
+      shareLink: null,
+    });
   });
 
   it('refuses more than four images before any request', async () => {

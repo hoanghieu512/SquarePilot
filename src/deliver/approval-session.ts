@@ -3,7 +3,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type { SquareClient } from '../client/square-client.js';
 import { withdrawDraft } from '../compose/compose-draft.js';
-import { latestVisual, markVisualOffered, setVisualImageUrl } from '../visual/draft-visual.js';
+import { latestOfferedVisual, latestVisual, markVisualOffered, setVisualImageUrl } from '../visual/draft-visual.js';
 import { createLogger } from '../utils/logger.js';
 import { APPROVAL_TTL_HOURS, expireStale, statusOf } from './approval-store.js';
 import { loadDraftCard } from './draft-card.js';
@@ -119,6 +119,10 @@ export async function runApprovalSession(deps: SessionDeps, draftIds: number[]):
     now: deps.now,
     seen: new Set(),
     scope: () => active,
+    cardChangedSince: (id, at) => {
+      const offeredAt = latestOfferedVisual(deps.db, id)?.offeredAt;
+      return offeredAt !== undefined && offeredAt !== null && offeredAt > at.toISOString();
+    },
     onPublish: (id) => deps.handlers.publish(id),
     publishBlocked: () =>
       deps.publishEnabled ? null : 'publishing is off for this run (start with --publish to post). The draft stays pending',

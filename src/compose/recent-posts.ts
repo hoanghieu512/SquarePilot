@@ -26,20 +26,29 @@ export interface RecentPost {
   /** Everything that was published, minus headings, annotations and link lines. */
   personaText: string;
   squarePostId?: string;
+  /** The SquarePilot draft a vault file was written from, when it says so. */
+  draftId?: number;
 }
 
-const FRONTMATTER = /^---\n([\s\S]*?)\n---\n/;
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
 
 function field(front: string, name: string): string | undefined {
   const m = front.match(new RegExp(`^${name}:\\s*"?(.*?)"?\\s*$`, 'm'));
-  return m?.[1] || undefined;
+  const value = m?.[1];
+  // The vault writer records a missing Square id as a YAML null.
+  return value && value !== 'null' ? value : undefined;
+}
+
+/** `YYYY-MM-DD` in Vietnam, the day the vault's file names use. */
+export function vietnamDate(at: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(at);
 }
 
 export function parseVaultPost(raw: string, fileName: string): RecentPost {
   const fm = raw.match(FRONTMATTER);
   const front = fm?.[1] ?? '';
   const afterFront = fm ? raw.slice(fm[0].length) : raw;
-  const lines = afterFront.split('\n');
+  const lines = afterFront.split(/\r?\n/);
 
   const body: string[] = [];
   let started = false;
@@ -72,6 +81,7 @@ export function parseVaultPost(raw: string, fileName: string): RecentPost {
     shapeText: body.join('\n').trim(),
     personaText: personaLines.join('\n').trim(),
     squarePostId: field(front, 'square_post_id'),
+    draftId: Number(field(front, 'draft_id')) || undefined,
   };
 }
 
@@ -94,6 +104,7 @@ export function readVaultPosts(squareDir: string): RecentPost[] {
 
 interface PostRow {
   id: number;
+  draft_id: number;
   content_snapshot: string;
   square_post_id: string | null;
   md_path: string | null;
@@ -115,17 +126,21 @@ export function readRecentPosts(
   const vault = readVaultPosts(squareDir);
   const files = new Set(vault.map((p) => p.ref));
   const ids = new Set(vault.map((p) => p.squarePostId).filter(Boolean));
+  const draftIds = new Set(vault.map((p) => p.draftId).filter(Boolean));
 
   const rows = db
     .prepare(
-      `SELECT id, content_snapshot, square_post_id, md_path, published_at
+      `SELECT id, draft_id, content_snapshot, square_post_id, md_path, published_at
        FROM posts ORDER BY published_at DESC LIMIT ?`,
     )
     .all(limit) as PostRow[];
 
+  // Matched by file name, Square id, or draft id: a post Square answered
+  // without an id, whose md_path update failed, is still the same post.
   const fromDb: RecentPost[] = rows
     .filter((r) => !(r.md_path && files.has(path.basename(r.md_path))))
     .filter((r) => !(r.square_post_id && ids.has(r.square_post_id)))
+    .filter((r) => !draftIds.has(r.draft_id))
     .map((r) => ({
       source: 'db',
       ref: String(r.id),
@@ -135,10 +150,11 @@ export function readRecentPosts(
       squarePostId: r.square_post_id ?? undefined,
     }));
 
-  // Comparing on the date prefix keeps file names and ISO timestamps in one
-  // order; on the same day the database post is the newer one, since the vault
-  // copy is written after publishing.
-  return [...fromDb, ...vault]
-    .sort((a, b) => b.date.slice(0, 10).localeCompare(a.date.slice(0, 10)))
-    .slice(0, limit);
+  // Sorted by calendar day. Vault files are named by the Vietnam day, so a
+  // database post is sorted by its Vietnam day too (20:30 UTC on the 2nd is
+  // the 3rd there). On the same day the database post comes first, since the
+  // vault copy is written after publishing.
+  const day = (p: RecentPost): string =>
+    p.source === 'db' ? vietnamDate(new Date(p.date)) : p.date.slice(0, 10);
+  return [...fromDb, ...vault].sort((a, b) => day(b).localeCompare(day(a))).slice(0, limit);
 }

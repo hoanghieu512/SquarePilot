@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
@@ -142,6 +142,23 @@ describe('createSessionHandlers', () => {
 
       expect(note).toMatch(/^https:\/\/sq\/p\/991\nvault copy failed: /);
       expect(db.prepare('SELECT COUNT(*) AS n FROM posts').get()).toEqual({ n: 1 });
+    });
+
+    it('still copies a live post to the vault when the database could not record it', async () => {
+      // Audit 2026-11-15: the vault copy read the posts row, so a failed insert
+      // left the live post in neither place and the persona cap missed it.
+      const vaultDir = mkdtempSync(join(tmpdir(), 'sp-hvault-'));
+      mkdirSync(join(vaultDir, 'outputs', 'square'), { recursive: true });
+      const id = seedDraft(db, { status: 'approved' });
+      seedVisual(db, id);
+      db.exec(`CREATE TRIGGER block_posts BEFORE INSERT ON posts BEGIN SELECT RAISE(ABORT, 'disk full'); END;`);
+
+      const note = await handlers({ square, publishEnabled: true, vaultDir }).publish(id);
+
+      expect(note).toContain('Not recorded in the database: disk full');
+      expect(note).toContain('vault: 2026-11-15-btc-holds-square-post.md');
+      const md = readFileSync(join(vaultDir, 'outputs', 'square', '2026-11-15-btc-holds-square-post.md'), 'utf8');
+      expect(md).toContain('square_post_id: "991"');
     });
 
     it('goes through the publisher, so the off switch holds', async () => {

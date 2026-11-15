@@ -46,6 +46,8 @@ export function createSessionHandlers(deps: HandlerDeps): SessionHandlers {
         const vault = writePublishedPost(deps.db, draftId, {
           vaultDir: deps.vaultDir,
           modelFor: deps.modelFor ?? ((tier) => tier),
+          // Without a posts row the vault copy is the only record of the post.
+          live: out.recorded ? undefined : out,
         });
         return [out.note, `vault: ${vault.mdPath.split('/').pop()}`, ...vault.notes].join('\n');
       } catch (err) {

@@ -105,7 +105,9 @@ describe('vault writer', () => {
     publish(id, { id: null, link: null });
     const md = readFileSync(writePublishedPost(db, id, { vaultDir: vault, modelFor }).mdPath, 'utf8');
     expect(md).toContain('square_post_id: null');
-    expect(md).toContain('- Binance Square post id: none returned (HTTP 504, the post is live)');
+    expect(md).toContain('- Binance Square post id: none returned');
+    // Read back as no id, not as the string "null".
+    expect(parseVaultPost(md, 'x.md').squarePostId).toBeUndefined();
   });
 
   it('marks the angle posted in its file, leaving the rest of the file alone', () => {
@@ -128,7 +130,12 @@ describe('vault writer', () => {
     const bank = join(vault, 'anchor-bank.md');
     const anchor = (id: string) =>
       `## ${id} - Title ${id}\n\n- **lens:** \`x\`\n- **used:** false\n- **last_used:** null\n\n**text_en:**\n> Text.\n\n`;
-    writeFileSync(bank, `---\nstatus: approved\n---\n\n${anchor('A1')}${anchor('A2')}${anchor('A3')}`);
+    writeFileSync(bank, `---\nstatus: approved\n---\n\n${anchor('A1')}${anchor('A2')}${anchor('A3')}${anchor('A12')}`);
+    // A draft that was offered and rejected keeps its anchor unused.
+    const rejected = seedDraft(db, { status: 'rejected', body: BODY, anchorTier: 'bank', anchorRef: 'A1' });
+    writeUnpublishedDraft(db, rejected, { vaultDir: vault, now: new Date('2026-11-15T04:00:00Z'), modelFor });
+    expect(readFileSync(bank, 'utf8').match(/- \*\*used:\*\* false/g)).toHaveLength(4);
+
     const id = seedDraft(db, { status: 'approved', body: BODY, anchorTier: 'bank', anchorRef: 'A2' });
     seedVisual(db, id);
     publish(id);
@@ -137,7 +144,59 @@ describe('vault writer', () => {
 
     const after = readFileSync(bank, 'utf8');
     expect(after).toContain('## A2 - Title A2\n\n- **lens:** `x`\n- **used:** true\n- **last_used:** 2026-11-15');
-    expect(after.match(/- \*\*used:\*\* false/g)).toHaveLength(2);
+    expect(after.match(/- \*\*used:\*\* false/g)).toHaveLength(3);
+  });
+
+  it('adds the bullets an anchor is missing, so a used anchor always carries its date', () => {
+    const bank = join(vault, 'anchor-bank.md');
+    writeFileSync(bank, '## A1 - One\n- **lens:** `x`\n\n**text_en:**\n> T.\n\n## A2 - Two\n- **used:** false\n');
+    expect(markBankAnchorUsed(bank, 'A1', '2026-11-15')).toBe('anchor A1 marked used on 2026-11-15');
+    expect(readFileSync(bank, 'utf8')).toBe(
+      '## A1 - One\n- **lens:** `x`\n- **used:** true\n- **last_used:** 2026-11-15\n\n**text_en:**\n> T.\n\n## A2 - Two\n- **used:** false\n',
+    );
+  });
+
+  it('marks the angle inside the vault, with CRLF notes and a rule in the body left intact', () => {
+    mkdirSync(join(vault, 'angles'));
+    const inVault = join(vault, 'angles', '2026-11-02-9-crlf-angle.md');
+    const body = '\r\nText.\r\n\r\n---\r\n\r\nAfter a rule.\r\n';
+    writeFileSync(inVault, `---\r\ndate: 2026-11-02\r\nstatus: unused\r\n---\r\n${body}`);
+    // The database remembers the note under another vault path.
+    const elsewhere = join(mkdtempSync(join(tmpdir(), 'sp-other-')), '2026-11-02-9-crlf-angle.md');
+    writeFileSync(elsewhere, '---\nstatus: unused\n---\nOther vault.\n');
+    db.prepare(`INSERT INTO angles (path, status, synced_at) VALUES (?, 'unused', 'x')`).run(elsewhere);
+    const id = seedDraft(db, { status: 'approved', body: BODY, outcome: 'angle', sourceRef: elsewhere });
+    seedVisual(db, id);
+    publish(id);
+
+    writePublishedPost(db, id, { vaultDir: vault, modelFor });
+
+    expect(readFileSync(inVault, 'utf8')).toBe(`---\r\ndate: 2026-11-02\r\nstatus: posted\r\n---\r\n${body}`);
+    expect(readFileSync(elsewhere, 'utf8')).toBe('---\nstatus: unused\n---\nOther vault.\n');
+    expect(db.prepare('SELECT status FROM angles WHERE path = ?').get(elsewhere)).toEqual({ status: 'posted' });
+  });
+
+  it('marks the angle posted in the database even when its note is gone', () => {
+    const gone = join(vault, 'angles', '2026-11-03-1-gone.md');
+    db.prepare(`INSERT INTO angles (path, status, synced_at) VALUES (?, 'unused', 'x')`).run(gone);
+    const id = seedDraft(db, { status: 'approved', body: BODY, outcome: 'angle', sourceRef: gone });
+    seedVisual(db, id);
+    publish(id);
+
+    const out = writePublishedPost(db, id, { vaultDir: vault, modelFor });
+
+    expect(out.notes).toContain('angle file missing, marked posted in the database only: 2026-11-03-1-gone.md');
+    expect(db.prepare('SELECT status FROM angles WHERE path = ?').get(gone)).toEqual({ status: 'posted' });
+  });
+
+  it('keeps an approved draft whose publish result is unknown, saying so', () => {
+    const id = seedDraft(db, { status: 'approved', body: BODY });
+    const md = readFileSync(
+      writeUnpublishedDraft(db, id, { vaultDir: vault, now: new Date('2026-11-15T04:00:00Z'), modelFor }),
+      'utf8',
+    );
+    expect(md).toContain('status: approved');
+    expect(md).toContain('rejected_reason: none, publish result unknown (Square did not answer clearly)');
   });
 
   it('reports an anchor the bank does not have instead of failing', () => {

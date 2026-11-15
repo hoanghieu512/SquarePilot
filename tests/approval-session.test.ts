@@ -358,6 +358,30 @@ describe('runApprovalSession', () => {
     );
   });
 
+  it('refuses a "d" sent before a new card reached the chat, so the owner approves what they saw', async () => {
+    // Audit 2026-11-15: "a K7" then "d K7" in quick succession published the
+    // new card, which the owner had not seen when sending "d".
+    const id = seedDraft(db, { createdAt: START.toISOString() });
+    seedVisual(db, id);
+    handlers.newVisual.mockImplementation(async (draftId: number) => {
+      clock = new Date(clock.getTime() + 5000);
+      seedVisual(db, draftId, { imageUrl: null, pngPath: png('card-v2.png') });
+    });
+    square.uploadImage.mockResolvedValueOnce('https://public.bnbstatic.com/v2.png');
+    const { api, sent } = scriptedApi((poll) => {
+      if (poll === 1) return [text(`a ${draftCode(id)}`), text(`d ${draftCode(id)}`)];
+      if (poll === 3) return [text(`b ${draftCode(id)} 6`)];
+      return [];
+    }, controller);
+
+    await runApprovalSession(deps(api), [id]);
+
+    expect(handlers.publish).not.toHaveBeenCalled();
+    expect(sent.map((s) => s.text)).toContain(
+      `${draftCode(id)} has a new card since your message. Check it, then send d ${draftCode(id)} again.`,
+    );
+  });
+
   it('keeps the shown card for publishing when a new card cannot be sent to the chat', async () => {
     const id = seedDraft(db, { createdAt: START.toISOString() });
     const v1 = seedVisual(db, id);

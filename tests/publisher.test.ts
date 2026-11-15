@@ -98,7 +98,14 @@ describe('publishDraft', () => {
       body: BODY,
       imageUrls: ['https://public.bnbstatic.com/new.png'],
     });
-    expect(out).toEqual({ squarePostId: '991', shareLink: 'https://sq/p/991', note: 'https://sq/p/991' });
+    expect(out).toEqual({
+      squarePostId: '991',
+      shareLink: 'https://sq/p/991',
+      note: 'https://sq/p/991',
+      recorded: true,
+      publishedAt: NOW.toISOString(),
+      body: BODY,
+    });
     const post = db.prepare('SELECT * FROM posts').get() as Record<string, unknown>;
     expect(post).toMatchObject({
       draft_id: id,

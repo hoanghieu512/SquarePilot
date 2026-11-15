@@ -86,6 +86,17 @@ describe('readVaultPosts', () => {
   });
 });
 
+describe('parseVaultPost with CRLF line endings', () => {
+  it('reads a post saved with Windows line endings like any other', () => {
+    const crlf = HAND_WRITTEN.replace(/\n/g, '\r\n');
+    const lf = parseVaultPost(HAND_WRITTEN, '2026-08-26-dusk.md');
+    const parsed = parseVaultPost(crlf, '2026-08-26-dusk.md');
+    expect(parsed.shapeText).toBe(lf.shapeText);
+    expect(parsed.date).toBe('2026-08-26');
+    expect(parsed.personaText).not.toContain('campaign: dusk-daily');
+  });
+});
+
 describe('readRecentPosts', () => {
   let dir: string;
   let db: Database.Database;
@@ -144,6 +155,25 @@ describe('readRecentPosts', () => {
     publish('#T\n\nBot post.', '2026-10-02T08:00:00Z', file);
 
     expect(readRecentPosts(db, dir)).toHaveLength(1);
+  });
+
+  it('counts a post once by its draft id when the database never learned the file name', () => {
+    // A 504 post has no Square id, and the md_path update can fail after the
+    // file is written: the draft id in the frontmatter still matches.
+    fs.writeFileSync(path.join(dir, '2026-10-02-bot.md'), '---\ndraft_id: 1\nsquare_post_id: null\n---\n\nBot post.\n');
+    publish('#T\n\nBot post.', '2026-10-02T08:00:00Z');
+
+    expect(readRecentPosts(db, dir)).toHaveLength(1);
+  });
+
+  it('dates a database post by the Vietnam calendar day, like the vault files', () => {
+    // 2026-10-02 20:30 UTC is already 2026-10-03 in Vietnam.
+    fs.writeFileSync(path.join(dir, '2026-10-03-morning.md'), 'Hand-written that morning.');
+    publish('Bot post the night before, UTC.', '2026-10-02T20:30:00Z');
+
+    const recent = readRecentPosts(db, dir);
+
+    expect(recent.map((p) => p.source)).toEqual(['db', 'vault']);
   });
 
   it('stops at the window size', () => {

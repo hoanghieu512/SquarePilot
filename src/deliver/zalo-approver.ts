@@ -67,6 +67,11 @@ export interface ApproverDeps {
    * was never offered here, and a bare "d" must never post it.
    */
   scope?(): ReadonlySet<number>;
+  /**
+   * Whether the draft's card in the chat changed after `at`. A "d" received
+   * before a new card arrived approves the card the owner saw, not the new one.
+   */
+  cardChangedSince?(draftId: number, at: Date): boolean;
 }
 
 export type ParsedCommand =
@@ -367,7 +372,8 @@ function formatHelpMessage(): string {
   ].join('\n');
 }
 
-export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Promise<void> {
+/** `receivedAt`: when the poll that carried the update returned. */
+export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate, receivedAt?: Date): Promise<void> {
   const msg = update.message;
   if (!msg) return;
 
@@ -471,6 +477,10 @@ export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Prom
         const blocked = deps.publishBlocked?.() ?? null;
         if (blocked) {
           await reply(deps, `${code}: ${blocked}`);
+          return;
+        }
+        if (receivedAt && deps.cardChangedSince?.(draftId, receivedAt)) {
+          await reply(deps, `${code} has a new card since your message. Check it, then send d ${code} again.`);
           return;
         }
         if (!resolve(deps.db, deps.now(), draftId, 'approved', null)) {
@@ -631,10 +641,11 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
         continue;
       }
 
+      const receivedAt = deps.now();
       for (const update of updates) {
         queue = queue.then(async () => {
           try {
-            await handleUpdate(deps, update);
+            await handleUpdate(deps, update, receivedAt);
           } catch (err) {
             logger.error('Zalo update failed', {
               messageId: update.message?.message_id,

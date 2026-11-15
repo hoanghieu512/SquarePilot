@@ -20,6 +20,13 @@ import path from 'node:path';
 const BASE_V1 = 'https://www.binance.com/bapi/composite/v1/public/pgc/openApi';
 const BASE_V2 = 'https://www.binance.com/bapi/composite/v2/public/pgc/openApi';
 const OK_CODE = '000000';
+
+/**
+ * The /content/add codes known to mean "not posted": sensitive words
+ * (20002, 20022) and the daily post limit (220009), from the official
+ * skill. Any other code leaves open whether the post went out.
+ */
+const DEFINITE_PUBLISH_REJECTIONS = new Set(['20002', '20022', '220009']);
 export const MAX_IMAGES = 4;
 
 export const DEFAULT_KEY_FILE = path.join(os.homedir(), '.config', 'binance-square', 'openapi-key');
@@ -129,12 +136,16 @@ export function createSquareClient(opts: SquareClientOptions): SquareClient {
     } catch {
       throw new SquareError(`${endpoint} returned non-JSON (HTTP ${res.status})`, undefined, true);
     }
+    if (json === null || typeof json !== 'object' || Array.isArray(json)) {
+      throw new SquareError(`${endpoint} returned an unexpected body (HTTP ${res.status})`, undefined, true);
+    }
     if (json.code !== OK_CODE) {
-      const ambiguous = res.status >= 500 || typeof json.code !== 'string';
+      const code = typeof json.code === 'string' ? json.code : undefined;
+      const message = typeof json.message === 'string' ? json.message : JSON.stringify(json.message ?? 'no message');
       throw new SquareError(
-        `${endpoint} failed [${json.code ?? 'no code'}] (HTTP ${res.status}): ${redact(json.message ?? 'no message')}`,
-        json.code,
-        ambiguous,
+        `${endpoint} failed [${code ?? 'no code'}] (HTTP ${res.status}): ${redact(message)}`,
+        code,
+        res.status >= 500 || code === undefined,
       );
     }
     return (json.data ?? {}) as Record<string, unknown>;
@@ -184,11 +195,22 @@ export function createSquareClient(opts: SquareClientOptions): SquareClient {
         BASE_V1,
       );
       if (res.status === 504) return { status: 'published_without_id', id: null, shareLink: null };
-      const d = await data(res, '/content/add');
+      let d: Record<string, unknown>;
+      try {
+        d = await data(res, '/content/add');
+      } catch (err) {
+        // Only a known rejection proves nothing went out; a duplicate post is
+        // worse than a draft the owner has to check by hand.
+        if (err instanceof SquareError && !err.ambiguous && !DEFINITE_PUBLISH_REJECTIONS.has(err.code ?? '')) {
+          throw new SquareError(err.message, err.code, true);
+        }
+        throw err;
+      }
+      const id = d.id === undefined || d.id === null || String(d.id).trim() === '' ? null : String(d.id);
       return {
         status: 'published',
-        id: d.id === undefined || d.id === null ? null : String(d.id),
-        shareLink: typeof d.shareLink === 'string' ? d.shareLink : null,
+        id,
+        shareLink: typeof d.shareLink === 'string' && d.shareLink.trim() !== '' ? d.shareLink : null,
       };
     },
   };
