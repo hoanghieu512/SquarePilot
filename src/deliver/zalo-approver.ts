@@ -61,6 +61,12 @@ export interface ApproverDeps {
    * "Publishing…" followed by a failure. `onPublish` must still refuse on its own.
    */
   publishBlocked?(): string | null;
+  /**
+   * The drafts this session offered. When given, commands reach only these:
+   * a draft left pending by another run (a dry run, a session that stopped)
+   * was never offered here, and a bare "d" must never post it.
+   */
+  scope?(): ReadonlySet<number>;
 }
 
 export type ParsedCommand =
@@ -200,7 +206,14 @@ function formatFooter(code: string): string {
   return [`[${code}] Reply with one of:`, ...formatCommandLines(code)].join('\n');
 }
 
-export async function sendForApproval(deps: ApproverDeps, card: DraftCard): Promise<void> {
+export async function sendForApproval(
+  deps: ApproverDeps,
+  card: DraftCard,
+  hooks: {
+    /** Called once the card's image is in the chat, even if the text after it fails. */
+    photoSent?(): void;
+  } = {},
+): Promise<void> {
   const status = statusOf(deps.db, card.draftId);
   if (status !== 'pending') {
     throw new Error(
@@ -215,6 +228,7 @@ export async function sendForApproval(deps: ApproverDeps, card: DraftCard): Prom
 
   if (card.photoUrl) {
     await deps.api.sendPhoto(deps.chatId, card.photoUrl, header);
+    hooks.photoSent?.();
   } else {
     await deps.api.sendMessage(deps.chatId, `${header}${noImageSuffix}`);
   }
@@ -242,30 +256,24 @@ const ACTION_LABELS: Record<'publish' | 'rewrite' | 'newVisual' | 'reject', stri
   reject: ['reject'],
 };
 
-const SEPARATOR_RE = /^[^\p{L}\p{N}]+$/u;
+/** What the footer puts between a command and its label. */
+const LABEL_SEPARATORS = new Set(['·', '-', ':']);
 
 /**
  * Drop a copied footer label from the end of a command: "a K7 new visual",
- * "d K7 · publish", "b K7 3 reject". Only the label of the command's own verb
- * counts, word for word, so free text after a code ("d K7 đừng đăng") still
- * makes the command unknown rather than a publish.
+ * "d K7 · publish", "b K7 3 reject". Strict on purpose, because a loose match
+ * turned questions into publishes ("Đang publish?" parsed as "d"):
+ * - the label must follow something (the code), never stand alone;
+ * - its words must match exactly, with no punctuation attached;
+ * - only one footer separator may sit between the code and the label.
  */
 function stripActionLabel(rest: string[], label: string[]): string[] {
-  let i = rest.length - 1;
-  let j = label.length - 1;
-  while (i >= 0 && j >= 0) {
-    if (SEPARATOR_RE.test(rest[i]!)) {
-      i -= 1;
-      continue;
-    }
-    const word = normalizeVerbToken(rest[i]!).replace(/[^a-z]/g, '');
-    if (word !== label[j]) return rest;
-    i -= 1;
-    j -= 1;
-  }
-  if (j >= 0) return rest;
-  while (i >= 0 && SEPARATOR_RE.test(rest[i]!)) i -= 1;
-  return rest.slice(0, i + 1);
+  if (rest.length <= label.length) return rest;
+  const tail = rest.slice(rest.length - label.length).map(normalizeVerbToken);
+  if (!tail.every((word, k) => word === label[k])) return rest;
+  let end = rest.length - label.length;
+  if (end > 1 && LABEL_SEPARATORS.has(rest[end - 1]!)) end -= 1;
+  return rest.slice(0, end);
 }
 
 export function parseCommand(text: string): ParsedCommand | null {
@@ -414,9 +422,14 @@ export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Prom
         await reply(deps, `No draft ${code}`);
         return;
       }
+      if (deps.scope && !deps.scope().has(decoded)) {
+        await reply(deps, `${code} is not part of this run`);
+        return;
+      }
       draftId = decoded;
     } else {
-      const pending = pendingDraftIds(deps.db);
+      const scope = deps.scope?.();
+      const pending = pendingDraftIds(deps.db).filter((id) => !scope || scope.has(id));
       if (expired.length > 0) {
         const example = pending.length > 0 ? `, for example: d ${draftCode(pending[0]!)}` : '';
         await reply(deps, `Some drafts just expired. Send the command with a code${example}`);
@@ -424,6 +437,15 @@ export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Prom
       }
       if (pending.length === 0) {
         await reply(deps, 'No draft is pending');
+        return;
+      }
+      // After a rewrite the chat holds more than one draft, and a bare
+      // command sent before the replacement arrived meant the old one.
+      if (scope && scope.size > 1) {
+        await reply(
+          deps,
+          `This run has offered more than one draft. Add the code, for example: d ${draftCode(pending[pending.length - 1]!)}`,
+        );
         return;
       }
       if (pending.length >= 2) {
@@ -547,12 +569,21 @@ export interface PollLoopOptions {
 
 export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Promise<void> {
   const { signal, timeoutSec = 30 } = options;
+
+  // One switch for both ways to stop: the caller aborting, or onCycle saying
+  // done. It also cancels the long poll in flight, so stopping takes effect
+  // now instead of up to `timeoutSec` later.
+  const stop = new AbortController();
+  const onCallerAbort = (): void => stop.abort();
+  if (signal.aborted) stop.abort();
+  else signal.addEventListener('abort', onCallerAbort, { once: true });
+
   const sleep =
     options.sleep ??
     ((ms: number) =>
       new Promise<void>((r) => {
         const timer = setTimeout(r, ms);
-        signal.addEventListener(
+        stop.signal.addEventListener(
           'abort',
           () => {
             clearTimeout(timer);
@@ -564,7 +595,6 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
 
   let backoffMs = INITIAL_BACKOFF_MS;
   let queue: Promise<void> = Promise.resolve();
-  let stopped = false;
 
   const scheduleCycle = (): void => {
     const onCycle = options.onCycle;
@@ -572,9 +602,9 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
     queue = queue.then(async () => {
       // Polls keep coming while a long command runs, so several cycles can be
       // queued behind it. Once one has said stop, the rest have nothing to add.
-      if (stopped) return;
+      if (stop.signal.aborted) return;
       try {
-        if ((await onCycle()) === true) stopped = true;
+        if ((await onCycle()) === true) stop.abort();
       } catch (err) {
         logger.error('Zalo poll cycle check failed', {
           reason: err instanceof Error ? err.message : String(err),
@@ -583,39 +613,40 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
     });
   };
 
-  while (!signal.aborted && !stopped) {
-    let updates: ZaloUpdate[];
-    try {
-      updates = await deps.api.getUpdates(timeoutSec);
-      backoffMs = INITIAL_BACKOFF_MS;
-    } catch (err) {
-      if (signal.aborted) break;
-      logger.warn('Zalo pollOnce failed, backing off', {
-        backoffMs,
-        reason: err instanceof Error ? err.message : String(err),
-      });
-      await sleep(backoffMs);
-      backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
+  try {
+    while (!stop.signal.aborted) {
+      let updates: ZaloUpdate[];
+      try {
+        updates = await deps.api.getUpdates(timeoutSec, stop.signal);
+        backoffMs = INITIAL_BACKOFF_MS;
+      } catch (err) {
+        if (stop.signal.aborted) break;
+        logger.warn('Zalo pollOnce failed, backing off', {
+          backoffMs,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+        await sleep(backoffMs);
+        backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
+        scheduleCycle();
+        continue;
+      }
+
+      for (const update of updates) {
+        queue = queue.then(async () => {
+          try {
+            await handleUpdate(deps, update);
+          } catch (err) {
+            logger.error('Zalo update failed', {
+              messageId: update.message?.message_id,
+              reason: err instanceof Error ? err.message : String(err),
+            });
+          }
+        });
+      }
       scheduleCycle();
-      continue;
     }
-
-    for (const update of updates) {
-      queue = queue.then(async () => {
-        try {
-          await handleUpdate(deps, update);
-        } catch (err) {
-          logger.error('Zalo update failed', {
-            messageId: update.message?.message_id,
-            reason: err instanceof Error ? err.message : String(err),
-          });
-        }
-      });
-    }
-    // A stop decided here takes effect after the next poll returns, at most
-    // `timeoutSec` later: commands that arrive meanwhile are still handled.
-    scheduleCycle();
+    await queue;
+  } finally {
+    signal.removeEventListener('abort', onCallerAbort);
   }
-
-  await queue;
 }

@@ -18,6 +18,8 @@ export interface VisualRow {
   schema: Partial<VisualSchema>;
   pngPath: string | null;
   imageUrl: string | null;
+  /** When the card reached the approval chat as an image; null if it never did. */
+  offeredAt: string | null;
 }
 
 export type DraftVisualResult =
@@ -46,7 +48,10 @@ interface RawVisual {
   schema_json: string;
   png_path: string | null;
   image_url: string | null;
+  offered_at: string | null;
 }
+
+const COLUMNS = 'id, draft_id, schema_json, png_path, image_url, offered_at';
 
 function toRow(r: RawVisual): VisualRow {
   return {
@@ -55,23 +60,42 @@ function toRow(r: RawVisual): VisualRow {
     schema: JSON.parse(r.schema_json) as Partial<VisualSchema>,
     pngPath: r.png_path,
     imageUrl: r.image_url,
+    offeredAt: r.offered_at,
   };
 }
 
+/** The newest card drawn for a draft, shown or not: the one to offer next. */
 export function latestVisual(db: Database.Database, draftId: number): VisualRow | undefined {
   const r = db
+    .prepare(`SELECT ${COLUMNS} FROM visuals WHERE draft_id = ? ORDER BY id DESC LIMIT 1`)
+    .get(draftId) as RawVisual | undefined;
+  return r ? toRow(r) : undefined;
+}
+
+/**
+ * The newest card the owner actually saw: the one an approval refers to, and
+ * so the one posted. A newer card that failed to upload or to reach the chat
+ * does not replace it.
+ */
+export function latestOfferedVisual(db: Database.Database, draftId: number): VisualRow | undefined {
+  const r = db
     .prepare(
-      `SELECT id, draft_id, schema_json, png_path, image_url FROM visuals
-       WHERE draft_id = ? ORDER BY id DESC LIMIT 1`,
+      `SELECT ${COLUMNS} FROM visuals
+       WHERE draft_id = ? AND offered_at IS NOT NULL AND image_url IS NOT NULL
+       ORDER BY id DESC LIMIT 1`,
     )
     .get(draftId) as RawVisual | undefined;
   return r ? toRow(r) : undefined;
 }
 
-/** Every focal number this draft's cards have shown, oldest first. */
+export function markVisualOffered(db: Database.Database, visualId: number, at: Date): void {
+  db.prepare('UPDATE visuals SET offered_at = ? WHERE id = ?').run(at.toISOString(), visualId);
+}
+
+/** Every focal number the owner has seen on this draft's cards, oldest first. */
 export function shownFocals(db: Database.Database, draftId: number): string[] {
   const rows = db
-    .prepare('SELECT schema_json FROM visuals WHERE draft_id = ? ORDER BY id ASC')
+    .prepare('SELECT schema_json FROM visuals WHERE draft_id = ? AND offered_at IS NOT NULL ORDER BY id ASC')
     .all(draftId) as { schema_json: string }[];
   return rows
     .map((r) => (JSON.parse(r.schema_json) as Partial<VisualSchema>).focal_number)
@@ -116,9 +140,15 @@ export async function renderDraftVisual(
     `${input.now.toISOString().slice(0, 10)}-${visualSlug(input.hashtag)}-d${input.draftId}${variant}.png`,
   );
 
-  // "No image, no post": the data gate already proved the schema can be
-  // filled, so a throw here is a rendering fault and is left to the caller.
-  const rendered = await (input.render ?? renderToFile)(schema as VisualSchema, pngPath);
+  // "No image, no post": a card that cannot be drawn (over a length cap, over
+  // the upload size) is a refusal like any other, so the caller withdraws the
+  // draft instead of leaving it pending with no card.
+  let rendered: RenderResult;
+  try {
+    rendered = await (input.render ?? renderToFile)(schema as VisualSchema, pngPath);
+  } catch (err) {
+    return { ok: false, reason: `the card could not be drawn: ${err instanceof Error ? err.message : String(err)}` };
+  }
   const info = db
     .prepare(
       `INSERT INTO visuals (draft_id, visual_type, mood, schema_json, png_path, bytes, created_at)
@@ -136,7 +166,14 @@ export async function renderDraftVisual(
 
   return {
     ok: true,
-    visual: { id: Number(info.lastInsertRowid), draftId: input.draftId, schema, pngPath, imageUrl: null },
+    visual: {
+      id: Number(info.lastInsertRowid),
+      draftId: input.draftId,
+      schema,
+      pngPath,
+      imageUrl: null,
+      offeredAt: null,
+    },
     changed: aligned.changed,
     rendered,
   };

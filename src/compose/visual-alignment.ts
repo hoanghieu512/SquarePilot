@@ -83,6 +83,10 @@ export function alignVisualToDraft(
         changed.push(`dropped cited tile ${tile.value}: not stated in the draft`);
         continue;
       }
+      if (match.raw === out.focal_number) {
+        changed.push(`dropped cited tile ${tile.value}: it is now the focal number`);
+        continue;
+      }
       if (match.raw !== tile.value) changed.push(`cited tile ${tile.value} -> ${match.raw}`);
       tiles.push({ ...tile, value: match.raw });
     }

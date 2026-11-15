@@ -31,7 +31,8 @@ export interface ZaloApi {
   getMe(): Promise<unknown>;
   sendMessage(chatId: string, text: string): Promise<unknown>;
   sendPhoto(chatId: string, photoUrl: string, caption?: string): Promise<unknown>;
-  getUpdates(timeoutSec: number): Promise<ZaloUpdate[]>;
+  /** `signal` ends the long poll early, e.g. when the session stops. */
+  getUpdates(timeoutSec: number, signal?: AbortSignal): Promise<ZaloUpdate[]>;
   setWebhook(url: string, secretToken: string): Promise<unknown>;
   deleteWebhook(): Promise<unknown>;
   getWebhookInfo(): Promise<unknown>;
@@ -114,7 +115,8 @@ export function createZaloApi({
       });
     } catch (err) {
       const message = redact(err instanceof Error ? err.message : String(err));
-      logger.warn(`${method} request failed`, { reason: message });
+      // A poll the caller cancelled on purpose is not worth a warning.
+      if (!signal?.aborted) logger.warn(`${method} request failed`, { reason: message });
       throw new ZaloError(`Request to Zalo ${method} failed: ${message}`);
     }
 
@@ -151,10 +153,9 @@ export function createZaloApi({
         ...(caption !== undefined ? { caption } : {}),
       });
     },
-    async getUpdates(timeoutSec) {
-      const signal = AbortSignal.timeout(
-        (Math.max(0, timeoutSec) + POLL_TIMEOUT_BUFFER_SEC) * 1000,
-      );
+    async getUpdates(timeoutSec, stop) {
+      const timeout = AbortSignal.timeout((Math.max(0, timeoutSec) + POLL_TIMEOUT_BUFFER_SEC) * 1000);
+      const signal = stop ? AbortSignal.any([stop, timeout]) : timeout;
       try {
         const result = await call('getUpdates', { timeout: String(timeoutSec) }, signal, [EMPTY_POLL_CODE]);
         return normalizeUpdates(result);

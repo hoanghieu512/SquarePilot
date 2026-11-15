@@ -81,6 +81,18 @@ describe('alignVisualToDraft', () => {
       expect(r.ok && r.schema.focal_number).toBe('$68k');
     });
 
+    it('drops a cited tile that now repeats the focal number', () => {
+      // The data gate put $68k on a tile; once it becomes the focal number,
+      // the card would show it twice.
+      const r = alignVisualToDraft(
+        { ...base, focal_number: '31%', stat_tiles: [{ label: 'views', value: '137K' }, { label: 'cited', value: '$68k' }] },
+        body,
+        { ...opts, excludeFocal: ['12%', '31%'] },
+      );
+      expect(r.ok && r.schema.focal_number).toBe('$68k');
+      expect(r.ok && r.schema.stat_tiles).toEqual([{ label: 'views', value: '137K' }]);
+    });
+
     it('refuses once every figure that fits has been shown, naming them', () => {
       const r = alignVisualToDraft(base, body, { ...opts, excludeFocal: ['12%', '31%', '$68k', '4,200'] });
       expect(r.ok).toBe(false);

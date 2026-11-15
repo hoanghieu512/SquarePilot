@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { SquareError, type SquareClient } from '../client/square-client.js';
 import { markLensUsed } from '../perspective/lens-store.js';
-import { latestVisual } from '../visual/draft-visual.js';
+import { latestOfferedVisual } from '../visual/draft-visual.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('publisher');
@@ -79,9 +79,10 @@ export async function publishDraft(deps: PublisherDeps, draftId: number): Promis
   const already = deps.db.prepare('SELECT id FROM posts WHERE draft_id = ?').get(draftId);
   if (already) throw new Error(`draft ${draftId} is already published`);
 
-  const visual = latestVisual(deps.db, draftId);
+  // The card the owner approved is the newest one that reached the chat.
+  const visual = latestOfferedVisual(deps.db, draftId);
   if (!visual?.imageUrl) {
-    throw new Error('the card was never uploaded to Square, and there is no post without an image. Send a for a new card');
+    throw new Error('no card of this draft reached the chat with its image, and there is no post without one. Send a for a new card');
   }
   if (!deps.square) throw new Error('no Square OpenAPI key is configured');
 

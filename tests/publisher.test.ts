@@ -57,16 +57,25 @@ describe('publishDraft', () => {
   });
 
   it('refuses everything while publishing is off, before reading the draft', async () => {
-    const id = seedDraft(db, { status: 'approved' });
-    seedVisual(db, id);
-    await expect(publishDraft(deps({ enabled: false }), id)).rejects.toBeInstanceOf(PublishingDisabledError);
+    // No such draft: only a check made before the lookup can answer "off".
+    await expect(publishDraft(deps({ enabled: false }), 999)).rejects.toBeInstanceOf(PublishingDisabledError);
     expect(square.publishPost).not.toHaveBeenCalled();
+  });
+
+  it('posts the newest card the owner was shown, not a newer one that never reached the chat', async () => {
+    const id = seedDraft(db, { status: 'approved' });
+    seedVisual(db, id, { imageUrl: 'https://public.bnbstatic.com/shown.png' });
+    seedVisual(db, id, { imageUrl: 'https://public.bnbstatic.com/never-sent.png', offered: false });
+
+    await publishDraft(deps(), id);
+
+    expect(square.publishPost.mock.calls[0]![0].imageUrls).toEqual(['https://public.bnbstatic.com/shown.png']);
   });
 
   it('refuses a draft whose card was never uploaded: no image, no post', async () => {
     const id = seedDraft(db, { status: 'approved' });
     seedVisual(db, id, { imageUrl: null });
-    await expect(publishDraft(deps(), id)).rejects.toThrow(/never uploaded/);
+    await expect(publishDraft(deps(), id)).rejects.toThrow(/no card of this draft reached the chat/);
     expect(square.publishPost).not.toHaveBeenCalled();
   });
 

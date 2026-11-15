@@ -69,7 +69,13 @@ export function seedDraft(db: Database.Database, over: SeedDraft = {}): number {
 export function seedVisual(
   db: Database.Database,
   draftId: number,
-  over: { schema?: Partial<VisualSchema>; pngPath?: string | null; imageUrl?: string | null } = {},
+  over: {
+    schema?: Partial<VisualSchema>;
+    pngPath?: string | null;
+    imageUrl?: string | null;
+    /** Whether the card reached the chat. Default: yes when it has an image URL. */
+    offered?: boolean;
+  } = {},
 ): number {
   const schema: Partial<VisualSchema> = over.schema ?? {
     visual_type: 'macro_card',
@@ -81,16 +87,20 @@ export function seedVisual(
       { label: 'posts', value: '1.9K' },
     ],
   };
+  const imageUrl =
+    over.imageUrl === undefined ? `https://public.bnbstatic.com/card-${draftId}.png` : over.imageUrl;
   const info = db
     .prepare(
-      `INSERT INTO visuals (draft_id, visual_type, mood, schema_json, png_path, bytes, image_url, created_at)
-       VALUES (?, 'macro_card', 'neutral', ?, ?, 1000, ?, '2026-11-15T01:00:00.000Z')`,
+      `INSERT INTO visuals
+         (draft_id, visual_type, mood, schema_json, png_path, bytes, image_url, offered_at, created_at)
+       VALUES (?, 'macro_card', 'neutral', ?, ?, 1000, ?, ?, '2026-11-15T01:00:00.000Z')`,
     )
     .run(
       draftId,
       JSON.stringify(schema),
       over.pngPath === undefined ? `/tmp/card-${draftId}.png` : over.pngPath,
-      over.imageUrl === undefined ? `https://public.bnbstatic.com/card-${draftId}.png` : over.imageUrl,
+      imageUrl,
+      (over.offered ?? imageUrl !== null) ? '2026-11-15T01:00:00.000Z' : null,
     );
   return Number(info.lastInsertRowid);
 }

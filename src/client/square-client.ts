@@ -107,8 +107,22 @@ export function createSquareClient(opts: SquareClientOptions): SquareClient {
     }
   }
 
+  /**
+   * Only Square's own answer with a code is a definite failure. A body that
+   * breaks off, a 5xx from anything in between, or an envelope without a code
+   * leaves open whether the request was carried out, and is marked ambiguous.
+   */
   async function data(res: Response, endpoint: string): Promise<Record<string, unknown>> {
-    const raw = await res.text();
+    let raw: string;
+    try {
+      raw = await res.text();
+    } catch (err) {
+      throw new SquareError(
+        `${endpoint} answer broke off (HTTP ${res.status}): ${redact(err instanceof Error ? err.message : String(err))}`,
+        undefined,
+        true,
+      );
+    }
     let json: Envelope;
     try {
       json = JSON.parse(raw) as Envelope;
@@ -116,7 +130,12 @@ export function createSquareClient(opts: SquareClientOptions): SquareClient {
       throw new SquareError(`${endpoint} returned non-JSON (HTTP ${res.status})`, undefined, true);
     }
     if (json.code !== OK_CODE) {
-      throw new SquareError(`${endpoint} failed [${json.code}]: ${redact(json.message ?? 'no message')}`, json.code);
+      const ambiguous = res.status >= 500 || typeof json.code !== 'string';
+      throw new SquareError(
+        `${endpoint} failed [${json.code ?? 'no code'}] (HTTP ${res.status}): ${redact(json.message ?? 'no message')}`,
+        json.code,
+        ambiguous,
+      );
     }
     return (json.data ?? {}) as Record<string, unknown>;
   }

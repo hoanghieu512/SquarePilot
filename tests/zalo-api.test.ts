@@ -220,6 +220,24 @@ describe('createZaloApi', () => {
     await expect(api.getUpdates(30)).resolves.toEqual([]);
   });
 
+  it('getUpdates ends early when the caller aborts, without waiting for the long poll', async () => {
+    const fetchImpl = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted')), {
+            once: true,
+          });
+        }),
+    );
+    const api = createZaloApi({ token: TOKEN, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const controller = new AbortController();
+
+    const poll = api.getUpdates(30, controller.signal);
+    controller.abort();
+
+    await expect(poll).rejects.toBeInstanceOf(ZaloError);
+  });
+
   it('still throws other getUpdates errors', async () => {
     const f = fakeFetch(200, { ok: false, error_code: 401, description: 'Unauthorized' });
     const api = createZaloApi({ token: TOKEN, fetchImpl: f as unknown as typeof fetch });

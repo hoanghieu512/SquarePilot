@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import type { DraftContext, DrawnDraft } from '../src/pipeline.js';
 import { PublishingDisabledError } from '../src/deliver/publisher.js';
 import { createSessionHandlers, type HandlerDeps } from '../src/deliver/session-handlers.js';
-import { visualSlug, type RenderFn } from '../src/visual/draft-visual.js';
+import { renderDraftVisual, visualSlug, type RenderFn } from '../src/visual/draft-visual.js';
 import { memoryDb, seedDraft, seedVisual } from './helpers/approval-db.js';
 
 const NOW = new Date('2026-11-15T02:00:00.000Z');
@@ -88,8 +88,26 @@ describe('createSessionHandlers', () => {
       expect(rows.map((r) => JSON.parse(r.schema_json).focal_number)).toEqual(['12%', '$68k']);
       expect(rows[1]!.png_path).toBe(`/v/2026-11-15-btcholds-d${id}-v2.png`);
 
+      // The session uploads and offers the new card before the next request.
+      db.prepare(`UPDATE visuals SET image_url = 'https://x/v2.png', offered_at = ? WHERE draft_id = ?`).run(
+        NOW.toISOString(),
+        id,
+      );
       await expect(h.newVisual(id)).rejects.toThrow(/no other figure.*12%, \$68k/);
     });
+  });
+
+  it('counts only cards that reached the chat as shown, so a failed upload can be drawn again', async () => {
+    const id = seedDraft(db, { body: '#BTCHolds\n\nVolume rose 12% on the week.' });
+    // The first card's upload failed, so the chat got the draft as "(no image)".
+    seedVisual(db, id, { imageUrl: null, pngPath: '/v/first.png' });
+
+    await handlers().newVisual(id);
+
+    const focals = db.prepare('SELECT schema_json FROM visuals WHERE draft_id = ? ORDER BY id').all(id) as {
+      schema_json: string;
+    }[];
+    expect(focals.map((r) => JSON.parse(r.schema_json).focal_number)).toEqual(['12%', '12%']);
   });
 
   describe('publish', () => {
@@ -98,6 +116,27 @@ describe('createSessionHandlers', () => {
       seedVisual(db, id);
       await expect(handlers().publish(id)).rejects.toBeInstanceOf(PublishingDisabledError);
     });
+  });
+});
+
+describe('renderDraftVisual', () => {
+  it('turns a rendering fault into a refusal and records no card', async () => {
+    const db = memoryDb();
+    const id = seedDraft(db);
+    const r = await renderDraftVisual(db, {
+      draftId: id,
+      body: '#BTCHolds\n\nVolume rose 12% on the week.',
+      hashtag: '#BTCHolds',
+      baseSchema: { headline_1: 'BTC', focal_number: '12%', stat_tiles: [] },
+      visualDir: '/v',
+      now: NOW,
+      render: async () => {
+        throw new Error('Rendered PNG is 1200 KB, over the 976 KB upload limit');
+      },
+    });
+    expect(r).toEqual({ ok: false, reason: 'the card could not be drawn: Rendered PNG is 1200 KB, over the 976 KB upload limit' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM visuals').get()).toEqual({ n: 0 });
+    db.close();
   });
 });
 

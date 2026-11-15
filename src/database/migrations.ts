@@ -182,6 +182,16 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE selections ADD COLUMN perspective_summary TEXT;
     `,
   },
+  {
+    version: 5,
+    name: 'visual_offered_at',
+    sql: `
+      -- When this card reached the approval chat as an image. A new card that
+      -- was drawn but never shown must not be the one posted, and must not
+      -- count as a figure the owner has already seen.
+      ALTER TABLE visuals ADD COLUMN offered_at TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

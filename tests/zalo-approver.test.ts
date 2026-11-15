@@ -164,13 +164,23 @@ describe('parseCommand', () => {
     // 2026-11-15: the owner copied "a AC new visual" from the first footer.
     expect(parseCommand('a AC new visual')).toEqual({ action: 'newVisual', code: 'AC' });
     expect(parseCommand('a K7 · new visual')).toEqual({ action: 'newVisual', code: 'K7' });
-    expect(parseCommand('a K7 (new visual)')).toEqual({ action: 'newVisual', code: 'K7' });
     expect(parseCommand('d K7 publish')).toEqual({ action: 'publish', code: 'K7' });
     expect(parseCommand('D K7 · Publish')).toEqual({ action: 'publish', code: 'K7' });
     expect(parseCommand('v K7 rewrite')).toEqual({ action: 'rewrite', code: 'K7' });
     expect(parseCommand('b K7 3 reject')).toEqual({ action: 'reject', code: 'K7', reason: 'facts' });
-    expect(parseCommand('d publish')).toEqual({ action: 'publish' });
     for (const bad of [
+      // Review 2026-11-15: a label with nothing before it, or with punctuation
+      // or symbols around it, made questions and negations publish.
+      'Đang publish?',
+      'đang publish...',
+      'd ? publish',
+      'd ❌ publish',
+      'd publish?',
+      'd publish',
+      'a new visual',
+      'd K7 · publish?',
+      'd K7 ❌ publish',
+      'a K7 (new visual)',
       'd K7 đừng đăng',
       'd K7 rewrite',
       'a K7 visual',
@@ -630,6 +640,44 @@ describe('zalo-approver and approval-store', () => {
       expect(fake.calls.map((c) => c.text)).toEqual([`${code}: publishing is off for this run`]);
     });
 
+    describe('scoped to the drafts a session offered', () => {
+      it('refuses a code from outside the scope, even when that draft is pending', async () => {
+        const mine = insertDraft();
+        const other = insertDraft();
+        deps.scope = () => new Set([mine]);
+
+        await handleUpdate(deps, textUpdate(`d ${draftCode(other)}`));
+
+        expect(published).not.toHaveBeenCalled();
+        expect(row(other).status).toBe('pending');
+        expect(fake.calls.at(-1)?.text).toBe(`${draftCode(other)} is not part of this run`);
+      });
+
+      it('lets a bare command reach the one offered draft, ignoring a stray pending one', async () => {
+        const stray = insertDraft();
+        const mine = insertDraft();
+        deps.scope = () => new Set([mine]);
+
+        await handleUpdate(deps, textUpdate('d'));
+
+        expect(published).toHaveBeenCalledWith(mine);
+        expect(row(stray).status).toBe('pending');
+      });
+
+      it('asks for a code once the run has offered more than one draft', async () => {
+        const original = insertDraft(hoursAgo(1), 'rejected');
+        const replacement = insertDraft();
+        deps.scope = () => new Set([original, replacement]);
+
+        await handleUpdate(deps, textUpdate('d'));
+
+        expect(published).not.toHaveBeenCalled();
+        expect(fake.calls.at(-1)?.text).toBe(
+          `This run has offered more than one draft. Add the code, for example: d ${draftCode(replacement)}`,
+        );
+      });
+    });
+
     it('appends the note onPublish returns, such as the post link', async () => {
       const id = insertDraft();
       const code = draftCode(id);
@@ -836,16 +884,56 @@ describe('zalo-approver and approval-store', () => {
         await new Promise((r) => setTimeout(r, 1));
         return polls === 1 ? [textUpdate(`d ${code}`)] : [];
       });
+      let cycles = 0;
       const onCycle = vi.fn(async () => {
+        cycles += 1;
         events.push(`cycle:${row(id).status}`);
-        return row(id).status === 'approved' && events.includes('publish:end');
+        // Say "go on" once, so the test shows the loop keeps polling after a
+        // false and stops only on true.
+        return cycles >= 2;
       });
 
       await pollLoop(deps, { signal: controller.signal, timeoutSec: 20, onCycle });
 
       expect(controller.signal.aborted).toBe(false);
-      expect(events.slice(0, 3)).toEqual(['publish:start', 'publish:end', 'cycle:approved']);
-      expect(onCycle).toHaveBeenCalledTimes(1);
+      expect(events.slice(0, 4)).toEqual(['publish:start', 'publish:end', 'cycle:approved', 'cycle:approved']);
+      expect(onCycle).toHaveBeenCalledTimes(2);
+    });
+
+    it('pollLoop cancels the poll in flight when it stops, instead of waiting it out', async () => {
+      const controller = new AbortController();
+      const seenSignals: (AbortSignal | undefined)[] = [];
+      fake.api.getUpdates.mockImplementation(async (_t: number, signal?: AbortSignal) => {
+        seenSignals.push(signal);
+        if (seenSignals.length === 1) return [];
+        // A real long poll: only an abort ends it early.
+        return await new Promise<ZaloUpdate[]>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      });
+
+      const started = Date.now();
+      await pollLoop(deps, { signal: controller.signal, timeoutSec: 30, onCycle: async () => true });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(seenSignals).toHaveLength(2);
+      expect(seenSignals[1]?.aborted).toBe(true);
+    });
+
+    it('pollLoop cancels the poll in flight when the caller aborts', async () => {
+      const controller = new AbortController();
+      fake.api.getUpdates.mockImplementation(
+        async (_t: number, signal?: AbortSignal) =>
+          await new Promise<ZaloUpdate[]>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          }),
+      );
+
+      const loop = pollLoop(deps, { signal: controller.signal, timeoutSec: 30 });
+      setTimeout(() => controller.abort(), 5);
+      await loop;
+
+      expect(fake.api.getUpdates).toHaveBeenCalledTimes(1);
     });
 
     it('pollLoop still runs onCycle while getUpdates keeps failing', async () => {

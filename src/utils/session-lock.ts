@@ -24,7 +24,7 @@ function alive(pid: number): boolean {
 
 export function acquireSessionLock(file: string, pid: number = process.pid): LockResult {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       fs.writeFileSync(file, String(pid), { flag: 'wx' });
       return {
@@ -39,12 +39,24 @@ export function acquireSessionLock(file: string, pid: number = process.pid): Loc
       };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      const holder = Number.parseInt(fs.readFileSync(file, 'utf8').trim(), 10);
+      // The holder can release the lock between the failed create and these
+      // reads; a missing file just means the next attempt can take it.
+      let holder = Number.NaN;
+      try {
+        holder = Number.parseInt(fs.readFileSync(file, 'utf8').trim(), 10);
+      } catch (readErr) {
+        if ((readErr as NodeJS.ErrnoException).code !== 'ENOENT') throw readErr;
+        continue;
+      }
       if (Number.isInteger(holder) && holder > 0 && holder !== pid && alive(holder)) {
         return { acquired: false, heldBy: holder };
       }
       // Stale: the holder died without releasing it, or it is our own pid.
-      fs.unlinkSync(file);
+      try {
+        fs.unlinkSync(file);
+      } catch (unlinkErr) {
+        if ((unlinkErr as NodeJS.ErrnoException).code !== 'ENOENT') throw unlinkErr;
+      }
     }
   }
   throw new Error(`Could not take the session lock at ${file}`);

@@ -302,9 +302,104 @@ describe('runApprovalSession', () => {
     const summary = await runApprovalSession(deps(api), [id]);
 
     expect(summary.reason).toBe('aborted');
-    expect(status(id).status).toBe('pending');
-    expect(sent.at(-1)!.text).toBe(
-      `Approval session stopped (aborted). ${draftCode(id)} still pending, but commands are no longer read.`,
+    // Withdrawn, not left pending: no later run can act on a draft it did not offer.
+    expect(status(id)).toEqual({ status: 'rejected', reject_reason: 'session-ended' });
+    expect(sent.at(-1)!.text).toBe(`Approval session stopped (aborted). ${draftCode(id)} withdrawn, not posted.`);
+  });
+
+  it('gives up at the deadline and withdraws what is still pending', async () => {
+    // Created an hour into the session, so it has not expired when the
+    // session's own deadline (6 h + 30 min from its start) passes.
+    const id = seedDraft(db, { createdAt: new Date(START.getTime() + 3600_000).toISOString() });
+    seedVisual(db, id);
+    const { api, sent } = scriptedApi((poll) => {
+      if (poll === 2) clock = new Date(START.getTime() + 6.5 * 3600_000 + 60_000);
+      return [];
+    }, controller);
+
+    const summary = await runApprovalSession(deps(api), [id]);
+
+    expect(summary.reason).toBe('deadline');
+    expect(status(id)).toEqual({ status: 'rejected', reject_reason: 'session-ended' });
+    expect(sent.at(-1)!.text).toBe(`Approval session stopped (deadline). ${draftCode(id)} withdrawn, not posted.`);
+  });
+
+  it('does not upload a card that is already on Square', async () => {
+    const id = seedDraft(db, { createdAt: START.toISOString() });
+    seedVisual(db, id);
+    const { api } = scriptedApi((poll) => (poll === 1 ? [text(`b ${draftCode(id)} 6`)] : []), controller);
+
+    await runApprovalSession(deps(api), [id]);
+
+    expect(square.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('needs a code after a rewrite, so a bare "d" cannot post a replacement nobody has read', async () => {
+    const oldId = seedDraft(db, { createdAt: START.toISOString() });
+    seedVisual(db, oldId);
+    let newId = 0;
+    handlers.rewrite.mockImplementation(async () => {
+      newId = seedDraft(db, { createdAt: START.toISOString() });
+      seedVisual(db, newId);
+      return newId;
+    });
+    const { api, sent } = scriptedApi((poll) => {
+      if (poll === 1) return [text(`v ${draftCode(oldId)}`)];
+      if (poll === 2) return [text('d')];
+      if (poll === 4) return [text(`b ${draftCode(newId)} 6`)];
+      return [];
+    }, controller);
+
+    await runApprovalSession(deps(api), [oldId]);
+
+    expect(handlers.publish).not.toHaveBeenCalled();
+    expect(sent.map((s) => s.text)).toContain(
+      `This run has offered more than one draft. Add the code, for example: d ${draftCode(newId)}`,
     );
+  });
+
+  it('keeps the shown card for publishing when a new card cannot be sent to the chat', async () => {
+    const id = seedDraft(db, { createdAt: START.toISOString() });
+    const v1 = seedVisual(db, id);
+    let v2 = 0;
+    handlers.newVisual.mockImplementation(async (draftId: number) => {
+      v2 = seedVisual(db, draftId, { imageUrl: null, pngPath: png('card-v2.png') });
+    });
+    square.uploadImage.mockResolvedValueOnce('https://public.bnbstatic.com/v2.png');
+    const { api, sent } = scriptedApi((poll) => {
+      if (poll === 1) return [text(`a ${draftCode(id)}`)];
+      if (poll === 3) return [text(`b ${draftCode(id)} 6`)];
+      return [];
+    }, controller);
+    api.sendPhoto.mockImplementation(async (_c: string, url: string) => {
+      if (url.endsWith('v2.png')) throw new Error('Zalo down');
+      return {};
+    });
+
+    await runApprovalSession(deps(api), [id]);
+
+    const offered = db.prepare('SELECT id FROM visuals WHERE offered_at IS NOT NULL ORDER BY id').all() as { id: number }[];
+    expect(offered.map((r) => r.id)).toEqual([v1]);
+    expect(v2).toBeGreaterThan(v1);
+    expect(sent.map((s) => s.text).some((t) => t.startsWith('Error: '))).toBe(true);
+  });
+
+  it('reports a new card that could not be uploaded, instead of sending it without its image', async () => {
+    const id = seedDraft(db, { createdAt: START.toISOString() });
+    seedVisual(db, id);
+    handlers.newVisual.mockImplementation(async (draftId: number) => {
+      seedVisual(db, draftId, { imageUrl: null, pngPath: png('card-v2.png') });
+    });
+    square.uploadImage.mockRejectedValueOnce(new Error('Square down'));
+    const { api, sent } = scriptedApi((poll) => {
+      if (poll === 1) return [text(`a ${draftCode(id)}`)];
+      if (poll === 3) return [text(`b ${draftCode(id)} 6`)];
+      return [];
+    }, controller);
+
+    await runApprovalSession(deps(api), [id]);
+
+    expect(sent.filter((s) => s.type === 'photo')).toHaveLength(1);
+    expect(sent.map((s) => s.text)).toContain('Error: could not upload the new card: Square down');
   });
 });

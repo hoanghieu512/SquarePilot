@@ -3,6 +3,7 @@ import { loadConfig, ConfigError } from '../config/index.js';
 import { initDb, closeDb, TABLE_NAMES } from '../database/index.js';
 import { LlmClient } from '../llm/client.js';
 import { runUpToDraft } from '../pipeline.js';
+import { withdrawDraft } from '../compose/compose-draft.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('dry-run');
@@ -56,11 +57,13 @@ async function main(): Promise<void> {
       ? path.join(config.vaultDir, 'outputs', 'visuals', 'square-auto')
       : undefined;
 
-    const { candidates, chosen, draft, visual } = await runUpToDraft(db, config, {
+    const { candidates, chosen, draft, draftId, visual } = await runUpToDraft(db, config, {
       headed,
       llm,
       visualDir,
     });
+    // A dry run never offers its draft, so it must not wait in the queue.
+    if (draftId !== undefined) withdrawDraft(db, draftId, 'dry-run');
 
     for (const c of candidates) {
       const gate = c.dataGate ? (c.dataGate.ok ? 'visual ok' : `visual: ${c.dataGate.reason}`) : '—';

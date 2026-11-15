@@ -171,6 +171,31 @@ describe('publishPost', () => {
     }
   });
 
+  it('treats a 5xx JSON error, an envelope with no code, and a body that breaks off as ambiguous', async () => {
+    // Review 2026-11-15: each of these used to be a definite failure, so the
+    // draft went back on the queue while the post might be live.
+    const brokenBody = new Response(
+      new ReadableStream({
+        start(c) {
+          c.error(new Error('socket hang up'));
+        },
+      }),
+      { status: 200 },
+    );
+    const cases: Response[] = [
+      json({ code: '100001', message: 'upstream busy' }, 503),
+      json({ message: 'ok?' }, 200),
+      brokenBody,
+    ];
+    for (const answer of cases) {
+      const fetchImpl = vi.fn(async () => answer) as unknown as typeof fetch;
+      const client = createSquareClient({ apiKey: KEY, fetchImpl, sleep: noSleep });
+      const err = await client.publishPost({ body: 'x', imageUrls: [] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SquareError);
+      expect((err as SquareError).ambiguous).toBe(true);
+    }
+  });
+
   it('refuses more than four images before any request', async () => {
     const { fetchImpl, calls } = fakeFetch({});
     const client = createSquareClient({ apiKey: KEY, fetchImpl, sleep: noSleep });

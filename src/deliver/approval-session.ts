@@ -3,7 +3,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type { SquareClient } from '../client/square-client.js';
 import { withdrawDraft } from '../compose/compose-draft.js';
-import { latestVisual, setVisualImageUrl } from '../visual/draft-visual.js';
+import { latestVisual, markVisualOffered, setVisualImageUrl } from '../visual/draft-visual.js';
 import { createLogger } from '../utils/logger.js';
 import { APPROVAL_TTL_HOURS, expireStale, statusOf } from './approval-store.js';
 import { loadDraftCard } from './draft-card.js';
@@ -71,23 +71,38 @@ async function say(deps: SessionDeps, text: string): Promise<void> {
 
 /**
  * Upload the newest card if it is not on Square yet, then send the draft to
- * the approval chat. A failed upload still sends the draft, marked "no image":
- * the owner can read it, and "a" draws and uploads a fresh card.
+ * the approval chat, and record the card as offered once its image is there:
+ * only an offered card can be posted (see `latestOfferedVisual`).
+ *
+ * A draft's first offer goes out even when the upload fails, marked "no
+ * image", so the owner can read it and ask for a card with "a". A new card
+ * (`requireImage`) is the whole point of its offer, so a failed upload is
+ * reported instead, and the card already in the chat stays the one to post.
  */
-export async function offerDraft(deps: SessionDeps, approver: ApproverDeps, draftId: number): Promise<void> {
+export async function offerDraft(
+  deps: SessionDeps,
+  approver: ApproverDeps,
+  draftId: number,
+  opts: { requireImage?: boolean } = {},
+): Promise<void> {
   const visual = latestVisual(deps.db, draftId);
-  if (visual && !visual.imageUrl && visual.pngPath && deps.square) {
+  if (visual && !visual.imageUrl && visual.pngPath) {
     try {
+      if (!deps.square) throw new Error('no Square OpenAPI key is configured');
       const url = await deps.square.uploadImage(fs.readFileSync(visual.pngPath), path.basename(visual.pngPath));
       setVisualImageUrl(deps.db, visual.id, url);
     } catch (err) {
-      logger.warn('Card upload failed, sending the draft without its image', {
-        draftId,
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      const reason = err instanceof Error ? err.message : String(err);
+      if (opts.requireImage) throw new Error(`could not upload the new card: ${reason}`);
+      logger.warn('Card upload failed, sending the draft without its image', { draftId, reason });
     }
   }
-  await sendForApproval(approver, loadDraftCard(deps.db, draftId, { modelFor: deps.modelFor }));
+  const card = loadDraftCard(deps.db, draftId, { modelFor: deps.modelFor });
+  await sendForApproval(approver, card, {
+    photoSent: () => {
+      if (visual) markVisualOffered(deps.db, visual.id, deps.now());
+    },
+  });
 }
 
 export async function runApprovalSession(deps: SessionDeps, draftIds: number[]): Promise<SessionSummary> {
@@ -103,6 +118,7 @@ export async function runApprovalSession(deps: SessionDeps, draftIds: number[]):
     chatId: deps.chatId,
     now: deps.now,
     seen: new Set(),
+    scope: () => active,
     onPublish: (id) => deps.handlers.publish(id),
     publishBlocked: () =>
       deps.publishEnabled ? null : 'publishing is off for this run (start with --publish to post). The draft stays pending',
@@ -121,7 +137,7 @@ export async function runApprovalSession(deps: SessionDeps, draftIds: number[]):
     },
     onNewVisual: async (id) => {
       await deps.handlers.newVisual(id);
-      await offerDraft(deps, approver, id);
+      await offerDraft(deps, approver, id, { requireImage: true });
     },
   };
 
@@ -162,14 +178,17 @@ export async function runApprovalSession(deps: SessionDeps, draftIds: number[]):
   }
   if (deps.signal.aborted) reason = 'aborted';
 
-  const drafts = [...active].map((id) => ({ id, code: draftCode(id), status: statusOf(deps.db, id) }));
-  const left = drafts.filter((d) => d.status === 'pending');
+  // Nothing reads the chat after this, and no later run will act on a draft
+  // it did not offer, so a draft still pending here could never be answered.
+  const left = [...active].filter((id) => statusOf(deps.db, id) === 'pending');
+  for (const id of left) withdrawDraft(deps.db, id, 'session-ended');
   if (left.length > 0) {
     await say(
       deps,
-      `Approval session stopped (${reason}). ${left.map((d) => d.code).join(', ')} still pending, but commands are no longer read.`,
+      `Approval session stopped (${reason}). ${left.map((id) => draftCode(id)).join(', ')} withdrawn, not posted.`,
     );
   }
+  const drafts = [...active].map((id) => ({ id, code: draftCode(id), status: statusOf(deps.db, id) }));
   logger.info('Approval session ended', { reason, drafts });
   return { reason, drafts };
 }
