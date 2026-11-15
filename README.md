@@ -105,7 +105,7 @@ Toàn bộ các biến môi trường trong `.env.example` và cách mã nguồn
 | :--- | :--- | :--- | :--- |
 | `OPENROUTER_API_KEY` | Có | Không có | Khóa xác thực API của OpenRouter dùng để gửi yêu cầu sinh văn bản và chấm giọng văn qua endpoint tương thích chuẩn OpenAI. |
 | `OPENROUTER_MODEL_FREE` | Không | `nvidia/nemotron-3-ultra-550b-a55b:free` | Định danh model miễn phí trên OpenRouter, được dùng cho lần viết nháp đầu tiên (`attempt 1`) và dùng làm model giám khảo trong `tone-gate`. |
-| `OPENROUTER_MODEL_PAID` | Không | `anthropic/claude-sonnet-5` | Định danh model trả phí trên OpenRouter, được gọi khi bản nháp trượt cổng kiểm tra ở lần đầu và phải viết lại. |
+| `OPENROUTER_MODEL_PAID` | Không | `anthropic/claude-sonnet-5.5` | Định danh model trả phí trên OpenRouter, được gọi khi bản nháp trượt cổng kiểm tra ở lần đầu và phải viết lại. |
 | `ZALO_BOT_TOKEN` | Có với `zalo:setup` và bước duyệt | Không có | Token của bot Zalo dùng riêng cho việc duyệt bài, đọc bởi `loadZaloConfig()`. Không in ra log; token nằm trong URL nên mọi lỗi đều được che. |
 | `ZALO_CHAT_ID` | Có với bước duyệt | Không có | ID cuộc trò chuyện giữa bot và chủ tài khoản; lấy bằng `npm run zalo:setup` (nhắn một tin bất kỳ cho bot trong lúc script chờ). Tin từ chat khác bị bỏ qua. |
 | `ZALO_API_BASE` | Không | `https://bot-api.zaloplatforms.com` | Đổi sang server giả khi test. |

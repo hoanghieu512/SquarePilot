@@ -125,6 +125,10 @@ describe('runToneGate', () => {
     expect(verdict.ok).toBe(true);
     expect(verdict.usedModel).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The judge thinks by default; a capped budget leaves room for the verdict.
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body.max_tokens).toBe(8192);
+    expect(body.reasoning).toEqual({ max_tokens: 4096 });
   });
 
   it('passes the model violations through as corrections', async () => {

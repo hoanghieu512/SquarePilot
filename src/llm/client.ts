@@ -50,6 +50,12 @@ export interface CompleteArgs {
   user: string;
   tier?: Tier;
   maxTokens?: number;
+  /**
+   * Cap on the model's thinking, which counts against `maxTokens`. Omit to
+   * leave the provider default, which for reasoning models can spend the
+   * whole budget before the answer starts. A cap must stay below `maxTokens`.
+   */
+  reasoning?: { maxTokens: number } | { effort: 'none' | 'medium' | 'high' };
   temperature?: number;
   draftId?: number;
   signal?: AbortSignal;
@@ -137,6 +143,22 @@ export class LlmClient {
     const tier = args.tier ?? 'free';
     const model = this.modelFor(tier);
 
+    const maxTokens = args.maxTokens ?? DEFAULT_MAX_TOKENS;
+    let reasoning: { max_tokens: number } | { effort: string } | undefined;
+    if (args.reasoning && 'maxTokens' in args.reasoning) {
+      // Anthropic requires the thinking budget strictly below max_tokens and
+      // at least 1024; anything else is a caller bug, not a model failure.
+      if (args.reasoning.maxTokens < 1024 || args.reasoning.maxTokens >= maxTokens) {
+        throw new LlmError(
+          `Reasoning budget ${args.reasoning.maxTokens} must be at least 1024 and below max tokens ${maxTokens}`,
+          false,
+        );
+      }
+      reasoning = { max_tokens: args.reasoning.maxTokens };
+    } else if (args.reasoning) {
+      reasoning = { effort: args.reasoning.effort };
+    }
+
     const messages: { role: string; content: string }[] = [];
     if (args.system) messages.push({ role: 'system', content: args.system });
     messages.push({ role: 'user', content: args.user });
@@ -152,7 +174,8 @@ export class LlmClient {
         body: JSON.stringify({
           model,
           messages,
-          max_tokens: args.maxTokens ?? DEFAULT_MAX_TOKENS,
+          max_tokens: maxTokens,
+          ...(reasoning ? { reasoning } : {}),
           temperature: args.temperature ?? 0.8,
           usage: { include: true },
         }),

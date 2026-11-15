@@ -1,4 +1,5 @@
 import { LlmError, type LlmClient, type Tier } from '../llm/client.js';
+import { JUDGE_BUDGET } from '../llm/budgets.js';
 import type { VoiceAssets } from './prompt-assets.js';
 import { anchorBrief, type AnchorAssignment } from './anchor.js';
 
@@ -163,6 +164,7 @@ export async function runToneGate(draft: string, opts: ToneGateOptions): Promise
   try {
     result = await opts.llm.complete({
       purpose: 'tone-gate',
+      ...JUDGE_BUDGET,
       tier: opts.tier ?? 'free',
       draftId: opts.draftId,
       temperature: 0,

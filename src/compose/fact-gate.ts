@@ -1,4 +1,5 @@
 import { LlmError, type LlmClient, type Tier } from '../llm/client.js';
+import { JUDGE_BUDGET } from '../llm/budgets.js';
 import type { DraftRequest } from './drafter.js';
 import { checkFigures } from './fact-figures.js';
 import { hashtagToHeadline } from './data-gate.js';
@@ -152,6 +153,7 @@ export async function runFactGate(
   try {
     result = await opts.llm.complete({
       purpose: 'fact-gate',
+      ...JUDGE_BUDGET,
       tier: opts.tier ?? 'free',
       draftId: opts.draftId,
       temperature: 0,

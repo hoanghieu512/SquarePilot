@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { DRAFT_BUDGET } from '../llm/budgets.js';
 import { LlmError, type LlmClient, type Tier } from '../llm/client.js';
 import { DRAFTER_SYSTEM, buildPrompt, type DraftRequest } from './drafter.js';
 import { runToneGate } from './tone-gate.js';
@@ -91,6 +92,7 @@ export async function composeDraft(
     try {
       result = await opts.llm.complete({
         purpose: 'draft',
+        ...DRAFT_BUDGET,
         tier,
         temperature: 0.85,
         system: DRAFTER_SYSTEM,

@@ -339,6 +339,15 @@ describe('composeDraft', () => {
       return { llm, drafts };
     }
 
+    it('gives every draft call a capped thinking budget below its token limit', async () => {
+      const { llm } = fakeLlm(['ok']);
+      await composeDraft(req(), { llm, recent: [], maxAttempts: 1 });
+      const draftCall = (llm.complete as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c) => (c[0] as Args).purpose === 'draft',
+      )![0];
+      expect(draftCall).toMatchObject({ maxTokens: 6144, reasoning: { maxTokens: 2048 } });
+    });
+
     it('counts it as one failed attempt and continues on the paid tier', async () => {
       const { llm, drafts } = fakeLlm(['truncate', 'ok']);
       const out = await composeDraft(req(), { llm, recent: [], maxAttempts: 2 });

@@ -200,6 +200,47 @@ describe('LlmClient', () => {
     expect(row.error).toContain('ECONNREFUSED');
   });
 
+  describe('reasoning budget', () => {
+    function sentBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+      return JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    }
+
+    it('sends no reasoning field unless asked, leaving the provider default', async () => {
+      const fetchMock = vi.fn(async () => jsonResponse(okBody));
+      vi.stubGlobal('fetch', fetchMock);
+      await client.complete({ purpose: 'test', user: 'hi' });
+      expect(sentBody(fetchMock)).not.toHaveProperty('reasoning');
+      expect(sentBody(fetchMock).max_tokens).toBe(4096);
+    });
+
+    it('sends a thinking cap as reasoning.max_tokens next to max_tokens', async () => {
+      const fetchMock = vi.fn(async () => jsonResponse(okBody));
+      vi.stubGlobal('fetch', fetchMock);
+      await client.complete({ purpose: 'draft', user: 'hi', maxTokens: 6144, reasoning: { maxTokens: 2048 } });
+      expect(sentBody(fetchMock)).toMatchObject({ max_tokens: 6144, reasoning: { max_tokens: 2048 } });
+    });
+
+    it('sends an effort level as reasoning.effort', async () => {
+      const fetchMock = vi.fn(async () => jsonResponse(okBody));
+      vi.stubGlobal('fetch', fetchMock);
+      await client.complete({ purpose: 'test', user: 'hi', reasoning: { effort: 'none' } });
+      expect(sentBody(fetchMock).reasoning).toEqual({ effort: 'none' });
+    });
+
+    it.each([
+      [4096, 4096],
+      [5000, 4096],
+      [512, 4096],
+    ])('refuses a thinking cap of %i with max tokens %i before any request', async (cap, max) => {
+      const fetchMock = vi.fn(async () => jsonResponse(okBody));
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(
+        client.complete({ purpose: 'test', user: 'hi', maxTokens: max, reasoning: { maxTokens: cap } }),
+      ).rejects.toThrow(/Reasoning budget/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   it('never puts the api key anywhere but the Authorization header', async () => {
     const fetchMock = vi.fn(async () => jsonResponse(okBody));
     vi.stubGlobal('fetch', fetchMock);

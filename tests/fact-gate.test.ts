@@ -55,6 +55,7 @@ describe('runFactGate', () => {
     expect(out).toMatchObject({ ok: true, usedModel: true, corrections: [] });
     expect(complete).toHaveBeenCalledTimes(1);
     const { user, system } = complete.mock.calls[0]![0];
+    expect(complete.mock.calls[0]![0]).toMatchObject({ maxTokens: 8192, reasoning: { maxTokens: 4096 } });
     expect(user).toContain('BTC last traded at $68,214.');
     expect(user).toContain('Near $68k. Windows decide the story.');
     expect(system).toContain('A top post states');

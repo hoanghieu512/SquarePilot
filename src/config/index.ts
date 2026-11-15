@@ -18,7 +18,7 @@ const REQUIRED = ['OPENROUTER_API_KEY', 'CONTENT_CREATOR_DIR', 'VAULT_DIR'] as c
 
 const DEFAULTS = {
   OPENROUTER_MODEL_FREE: 'nvidia/nemotron-3-ultra-550b-a55b:free',
-  OPENROUTER_MODEL_PAID: 'anthropic/claude-sonnet-5',
+  OPENROUTER_MODEL_PAID: 'anthropic/claude-sonnet-5.5',
   LOG_LEVEL: 'info',
 } as const;
 
