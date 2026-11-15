@@ -169,15 +169,18 @@ export function recordSelection(
   dataGate: string | null = null,
 ): number {
   const ref = result.outcome === 'stop' ? null : result.perspective.ref;
+  const summary = result.outcome === 'stop' ? null : result.perspective.summary;
   const info = db
     .prepare(
-      `INSERT INTO selections (trend_id, outcome, source_ref, mode, rejected_notes, data_gate, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO selections
+         (trend_id, outcome, source_ref, perspective_summary, mode, rejected_notes, data_gate, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       trendId,
       result.outcome,
       ref,
+      summary,
       mode,
       JSON.stringify(result.rejected.map((r) => `[${r.rung}] ${r.candidate}: ${r.reason}`)),
       dataGate,

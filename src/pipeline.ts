@@ -10,8 +10,8 @@ import { gatherAll } from './perspective/evidence.js';
 import type { SelectionResult } from './perspective/types.js';
 import { recentModes, selectMode, type ModeChoice } from './compose/modes.js';
 import { runDataGate, type DataGateResult, type VisualSchema } from './compose/data-gate.js';
-import { alignVisualToDraft } from './compose/visual-alignment.js';
 import { loadVoiceAssets } from './compose/prompt-assets.js';
+import type { DraftRequest } from './compose/drafter.js';
 import {
   composeDraft,
   recentAnchorTiers,
@@ -24,7 +24,8 @@ import { personaCapInUse } from './compose/persona-guard.js';
 import { pipelineFactsFor, resolveAnchor } from './compose/anchor.js';
 import { readAnchorBank } from './perspective/anchor-bank.js';
 import type { LlmClient } from './llm/client.js';
-import { renderToFile, type RenderResult } from './visual/render.js';
+import type { RenderResult } from './visual/render.js';
+import { renderDraftVisual } from './visual/draft-visual.js';
 import { createLogger } from './utils/logger.js';
 
 const logger = createLogger('pipeline');
@@ -38,6 +39,27 @@ export interface Candidate {
   selectionId: number;
 }
 
+/**
+ * Everything a draft was written from. Kept in memory by the run that waits
+ * for approval, so a rewrite drafts again from the same trend, posts,
+ * perspective and anchor without collecting anything a second time.
+ */
+export interface DraftContext {
+  request: DraftRequest;
+  selectionId: number;
+  /** What the data gate found, before alignment to any one draft. */
+  baseSchema: Partial<VisualSchema>;
+}
+
+export interface DrawnDraft {
+  draft: ComposeOutcome;
+  draftId: number;
+  /** Present when the draft passed and its card was drawn: only then is it pending. */
+  visual?: RenderResult & { path: string };
+  /** Why a passed draft has no card, when it has none. */
+  visualSkipped?: string;
+}
+
 export interface PipelineResult {
   candidates: Candidate[];
   /** The one that will be drafted, or null on a quiet day. */
@@ -47,6 +69,60 @@ export interface PipelineResult {
   draftId?: number;
   /** Present once the visual has been rendered. */
   visual?: RenderResult & { path: string };
+  /** Present once a draft has been attempted, for a rewrite. */
+  context?: DraftContext;
+}
+
+/**
+ * Write a draft from its context, record it, and draw its card.
+ *
+ * Shared by the first draft of a run and every rewrite, so both leave the
+ * queue in the same state: a draft is pending only when it passed every gate
+ * and has a card, because there is no post without an image.
+ */
+export async function draftAndDraw(
+  db: Database.Database,
+  config: Config,
+  context: DraftContext,
+  options: { llm: LlmClient; visualDir?: string; now?: () => Date },
+): Promise<DrawnDraft> {
+  const now = options.now ?? (() => new Date());
+
+  // One account, two pipelines: the hand-written posts in the vault count
+  // toward the persona cap and the shape comparison exactly like this bot's
+  // own. Read per draft, so a rewrite sees a post published meanwhile.
+  const history = readRecentPosts(db, path.join(config.vaultDir, 'outputs', 'square'));
+
+  const draft = await composeDraft(context.request, { llm: options.llm, recent: history, now });
+  const draftId = recordDraft(db, context.selectionId, draft);
+  logger.info(
+    draft.ok
+      ? `Draft ready: ${draft.lengths.nfc} NFC / ${draft.lengths.nfd} NFD via ${draft.tier}`
+      : `Draft failed all ${draft.attempts.length} attempts`,
+  );
+  if (!draft.ok) return { draft, draftId };
+
+  if (!options.visualDir) {
+    withdrawDraft(db, draftId, 'no-visual');
+    return { draft, draftId, visualSkipped: 'no visual directory given' };
+  }
+
+  const drawn = await renderDraftVisual(db, {
+    draftId,
+    body: draft.body,
+    hashtag: context.request.trend.hashtag,
+    baseSchema: context.baseSchema,
+    visualDir: options.visualDir,
+    now: now(),
+  });
+  if (!drawn.ok) {
+    logger.warn(`Visual skipped: ${drawn.reason}`);
+    withdrawDraft(db, draftId, 'no-visual');
+    return { draft, draftId, visualSkipped: drawn.reason };
+  }
+  if (drawn.changed.length > 0) logger.info('Visual aligned to the draft', { changed: drawn.changed });
+
+  return { draft, draftId, visual: { ...drawn.rendered, path: drawn.visual.pngPath! } };
 }
 
 /**
@@ -142,8 +218,8 @@ export async function runUpToDraft(
   // the next pass with no deploy.
   const assets = loadVoiceAssets(config.contentCreatorDir);
 
-  // One account, two pipelines: the hand-written posts in the vault count
-  // toward the persona cap and the shape comparison exactly like this bot's own.
+  // The persona cap counts the hand-written posts too, so the anchor ladder
+  // reads the same history the gates will.
   const history = readRecentPosts(db, path.join(config.vaultDir, 'outputs', 'square'));
 
   // Rule E5's anchor is chosen here, not by the drafter. See `resolveAnchor`.
@@ -162,8 +238,9 @@ export async function runUpToDraft(
       (anchor.mayNameJob ? '' : ', job mention not allowed (cap in use)'),
   );
 
-  const draft = await composeDraft(
-    {
+  // The data gate passed for `chosen`, or it would not have been chosen.
+  const context: DraftContext = {
+    request: {
       trend: chosen.trend,
       perspective,
       mode: chosen.mode!.spec,
@@ -171,53 +248,20 @@ export async function runUpToDraft(
       assets,
       anchor,
     },
-    { llm: options.llm, recent: history },
-  );
+    selectionId: chosen.selectionId,
+    baseSchema: chosen.dataGate?.ok ? chosen.dataGate.available : {},
+  };
 
-  const draftId = recordDraft(db, chosen.selectionId, draft);
-  logger.info(
-    draft.ok
-      ? `Draft ready: ${draft.lengths.nfc} NFC / ${draft.lengths.nfd} NFD via ${draft.tier}`
-      : `Draft failed all ${draft.attempts.length} attempts`,
-  );
-
-  if (!options.visualDir || !draft.ok || !chosen.dataGate?.ok) {
-    if (draft.ok) withdrawDraft(db, draftId, 'no-visual');
-    return { candidates, chosen, draft, draftId };
-  }
-
-  const aligned = alignVisualToDraft(chosen.dataGate.available, draft.body, {
-    currentYear: new Date().getUTCFullYear(),
+  const drawn = await draftAndDraw(db, config, context, {
+    llm: options.llm,
+    visualDir: options.visualDir,
   });
-  if (!aligned.ok) {
-    logger.warn(`Visual skipped: ${aligned.reason}`);
-    withdrawDraft(db, draftId, 'no-visual');
-    return { candidates, chosen, draft, draftId };
-  }
-  if (aligned.changed.length > 0) logger.info('Visual aligned to the draft', { changed: aligned.changed });
-  const schema = aligned.schema;
-
-  // "No image, no post" - the data gate already proved the schema can be filled,
-  // so a failure here is a rendering fault, not a missing-content one.
-  const slug = chosen.trend.hashtag.replace(/^#/, '').toLowerCase().slice(0, 48);
-  const pngPath = path.join(
-    options.visualDir,
-    `${new Date().toISOString().slice(0, 10)}-${slug}.png`,
-  );
-
-  const rendered = await renderToFile(schema as VisualSchema, pngPath);
-  db.prepare(
-    `INSERT INTO visuals (draft_id, visual_type, mood, schema_json, png_path, bytes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    draftId,
-    schema.visual_type ?? 'macro_card',
-    schema.mood_variant ?? 'neutral',
-    JSON.stringify(schema),
-    pngPath,
-    rendered.bytes,
-    new Date().toISOString(),
-  );
-
-  return { candidates, chosen, draft, draftId, visual: { ...rendered, path: pngPath } };
+  return {
+    candidates,
+    chosen,
+    draft: drawn.draft,
+    draftId: drawn.draftId,
+    visual: drawn.visual,
+    context,
+  };
 }

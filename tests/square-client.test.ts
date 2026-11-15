@@ -151,6 +151,26 @@ describe('publishPost', () => {
     await expect(client.publishPost({ body: 'x', imageUrls: [] })).rejects.toThrow(/non-JSON \(HTTP 500\)/);
   });
 
+  it('marks a gateway answer and a dropped connection as ambiguous, an API rejection as definite', async () => {
+    // Ambiguous means the post may be live: the approver must not offer the
+    // draft again, or a second "d" posts it twice.
+    const cases: [Response | Error, boolean][] = [
+      [new Response('<html>Bad Gateway</html>', { status: 502 }), true],
+      [new Error('socket hang up'), true],
+      [json({ code: '220003', message: 'content rejected' }), false],
+    ];
+    for (const [answer, ambiguous] of cases) {
+      const fetchImpl = vi.fn(async () => {
+        if (answer instanceof Error) throw answer;
+        return answer;
+      }) as unknown as typeof fetch;
+      const client = createSquareClient({ apiKey: KEY, fetchImpl, sleep: noSleep });
+      const err = await client.publishPost({ body: 'x', imageUrls: [] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SquareError);
+      expect((err as SquareError).ambiguous).toBe(ambiguous);
+    }
+  });
+
   it('refuses more than four images before any request', async () => {
     const { fetchImpl, calls } = fakeFetch({});
     const client = createSquareClient({ apiKey: KEY, fetchImpl, sleep: noSleep });

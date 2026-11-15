@@ -32,26 +32,37 @@ function draftFigureFor(cardValue: string, draft: Figure[]): Figure | undefined 
 export function alignVisualToDraft(
   schema: Partial<VisualSchema>,
   body: string,
-  opts: { currentYear: number },
+  opts: {
+    currentYear: number;
+    /**
+     * Focal numbers already shown for this draft, as the draft writes them.
+     * A "new visual" request asks for a different figure, never the same one.
+     */
+    excludeFocal?: string[];
+  },
 ): AlignResult {
   const changed: string[] = [];
   const out: Partial<VisualSchema> = { ...schema };
   const draft = extractFigures(body, { currentYear: opts.currentYear });
+  const excluded = new Set(opts.excludeFocal ?? []);
 
   const focalMatch = out.focal_number ? draftFigureFor(out.focal_number, draft) : undefined;
-  if (focalMatch && focalMatch.raw.length <= CAPS.focal_number) {
+  if (focalMatch && focalMatch.raw.length <= CAPS.focal_number && !excluded.has(focalMatch.raw)) {
     if (focalMatch.raw !== out.focal_number) {
       changed.push(`focal_number ${out.focal_number} -> ${focalMatch.raw}`);
       out.focal_number = focalMatch.raw;
     }
   } else {
     const pick = draft
-      .filter((f) => f.raw.length <= CAPS.focal_number)
+      .filter((f) => f.raw.length <= CAPS.focal_number && !excluded.has(f.raw))
       .sort((a, b) => FOCAL_PREFERENCE.indexOf(a.unit) - FOCAL_PREFERENCE.indexOf(b.unit) || a.index - b.index)[0];
     if (!pick) {
       return {
         ok: false,
-        reason: `focal number ${out.focal_number ?? '(none)'} is not in the draft and the draft has no figure that fits the panel`,
+        reason:
+          excluded.size > 0
+            ? `the draft has no other figure that fits the panel (already shown: ${[...excluded].join(', ')})`
+            : `focal number ${out.focal_number ?? '(none)'} is not in the draft and the draft has no figure that fits the panel`,
       };
     }
     changed.push(`focal_number ${out.focal_number ?? '(none)'} -> ${pick.raw}`);

@@ -50,10 +50,17 @@ export interface ApproverDeps {
   chatId: string;
   now(): Date;
   seen: Set<string>;
-  onPublish(id: number): Promise<void>;
+  /** Resolves with an optional note (the post link) for the confirmation. */
+  onPublish(id: number): Promise<string | void>;
   onRewrite(id: number): Promise<void>;
   onNewVisual(id: number): Promise<void>;
   onReject?(id: number, reasonCode: string): Promise<void>;
+  /**
+   * A reason publishing is unavailable for every draft (a trial run), checked
+   * before the draft is touched: the owner gets one plain line instead of
+   * "Publishing…" followed by a failure. `onPublish` must still refuse on its own.
+   */
+  publishBlocked?(): string | null;
 }
 
 export type ParsedCommand =
@@ -174,11 +181,23 @@ function formatHeader(card: DraftCard, code: string, maxLen: number): string {
   return `${shortened.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
-function formatFooter(code: string): string {
+/**
+ * One command per line, the command first and its meaning after a dot. The
+ * first footer put both on one line ("a K7 new visual"), and the owner
+ * reasonably copied the whole phrase; `parseCommand` now accepts that too.
+ */
+function formatCommandLines(code: string): string[] {
   return [
-    `[${code}] Reply: d ${code} publish · v ${code} rewrite · a ${code} new visual · b ${code} <n> reject`,
+    `d ${code} · publish`,
+    `v ${code} · rewrite`,
+    `a ${code} · new visual`,
+    `b ${code} 1-6 · reject, with a reason:`,
     formatReasonsLine(),
-  ].join('\n');
+  ];
+}
+
+function formatFooter(code: string): string {
+  return [`[${code}] Reply with one of:`, ...formatCommandLines(code)].join('\n');
 }
 
 export async function sendForApproval(deps: ApproverDeps, card: DraftCard): Promise<void> {
@@ -213,6 +232,40 @@ function normalizeVerbToken(token: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd');
+}
+
+/** The words the footer prints after each command, as they may be copied back. */
+const ACTION_LABELS: Record<'publish' | 'rewrite' | 'newVisual' | 'reject', string[]> = {
+  publish: ['publish'],
+  rewrite: ['rewrite'],
+  newVisual: ['new', 'visual'],
+  reject: ['reject'],
+};
+
+const SEPARATOR_RE = /^[^\p{L}\p{N}]+$/u;
+
+/**
+ * Drop a copied footer label from the end of a command: "a K7 new visual",
+ * "d K7 · publish", "b K7 3 reject". Only the label of the command's own verb
+ * counts, word for word, so free text after a code ("d K7 đừng đăng") still
+ * makes the command unknown rather than a publish.
+ */
+function stripActionLabel(rest: string[], label: string[]): string[] {
+  let i = rest.length - 1;
+  let j = label.length - 1;
+  while (i >= 0 && j >= 0) {
+    if (SEPARATOR_RE.test(rest[i]!)) {
+      i -= 1;
+      continue;
+    }
+    const word = normalizeVerbToken(rest[i]!).replace(/[^a-z]/g, '');
+    if (word !== label[j]) return rest;
+    i -= 1;
+    j -= 1;
+  }
+  if (j >= 0) return rest;
+  while (i >= 0 && SEPARATOR_RE.test(rest[i]!)) i -= 1;
+  return rest.slice(0, i + 1);
 }
 
 export function parseCommand(text: string): ParsedCommand | null {
@@ -252,7 +305,7 @@ export function parseCommand(text: string): ParsedCommand | null {
     return null;
   }
 
-  const rest = rawTokens.slice(idx);
+  const rest = stripActionLabel(rawTokens.slice(idx), ACTION_LABELS[action]);
   if (rest.length === 0) {
     return { action };
   }
@@ -300,8 +353,9 @@ async function reply(deps: ApproverDeps, text: string): Promise<void> {
 
 function formatHelpMessage(): string {
   return [
-    'Commands: d [CODE] publish · v [CODE] rewrite · a [CODE] new visual · b [CODE] <1-6> reject · ? help',
-    formatReasonsLine(),
+    'Commands (CODE is the draft code, e.g. K7; leave it out when one draft is pending):',
+    ...formatCommandLines('CODE'),
+    '? · this help',
   ].join('\n');
 }
 
@@ -337,7 +391,7 @@ export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Prom
   try {
     const parsed = parseCommand(msg.text);
     if (!parsed) {
-      await reply(deps, 'Unknown command. Send ? for help.');
+      await reply(deps, `Unknown command.\n${formatHelpMessage()}`);
       return;
     }
 
@@ -392,20 +446,33 @@ export async function handleUpdate(deps: ApproverDeps, update: ZaloUpdate): Prom
 
     switch (parsed.action) {
       case 'publish': {
+        const blocked = deps.publishBlocked?.() ?? null;
+        if (blocked) {
+          await reply(deps, `${code}: ${blocked}`);
+          return;
+        }
         if (!resolve(deps.db, deps.now(), draftId, 'approved', null)) {
           await reply(deps, `${code} is not pending`);
           return;
         }
         await reply(deps, `Publishing ${code}…`);
+        let note: string | void;
         try {
-          await deps.onPublish(draftId);
+          note = await deps.onPublish(draftId);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          // The post may be live: putting the draft back on the queue would
+          // let the next "d" post it twice. It stays approved, for a person
+          // to check against the account.
+          if ((err as { uncertain?: unknown }).uncertain === true) {
+            await reply(deps, `${code} may or may not be posted: ${message}. It will not be offered again.`);
+            return;
+          }
           revertToPending(deps.db, draftId);
           await reply(deps, `Publish failed for ${code}: ${message}`);
           return;
         }
-        await reply(deps, `Published ${code}`);
+        await reply(deps, note ? `Published ${code}: ${note}` : `Published ${code}`);
         return;
       }
       case 'rewrite': {
@@ -469,6 +536,13 @@ export interface PollLoopOptions {
   signal: AbortSignal;
   sleep?: (ms: number) => Promise<void>;
   timeoutSec?: number;
+  /**
+   * Runs after every poll, queued behind the commands from that poll so it
+   * never sees a command half done (a draft between "approved" and
+   * "published", or a rewrite whose replacement does not exist yet). Return
+   * true to end the loop.
+   */
+  onCycle?: () => Promise<boolean | void>;
 }
 
 export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Promise<void> {
@@ -490,8 +564,26 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
 
   let backoffMs = INITIAL_BACKOFF_MS;
   let queue: Promise<void> = Promise.resolve();
+  let stopped = false;
 
-  while (!signal.aborted) {
+  const scheduleCycle = (): void => {
+    const onCycle = options.onCycle;
+    if (!onCycle) return;
+    queue = queue.then(async () => {
+      // Polls keep coming while a long command runs, so several cycles can be
+      // queued behind it. Once one has said stop, the rest have nothing to add.
+      if (stopped) return;
+      try {
+        if ((await onCycle()) === true) stopped = true;
+      } catch (err) {
+        logger.error('Zalo poll cycle check failed', {
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+  };
+
+  while (!signal.aborted && !stopped) {
     let updates: ZaloUpdate[];
     try {
       updates = await deps.api.getUpdates(timeoutSec);
@@ -504,6 +596,7 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
       });
       await sleep(backoffMs);
       backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
+      scheduleCycle();
       continue;
     }
 
@@ -519,6 +612,9 @@ export async function pollLoop(deps: ApproverDeps, options: PollLoopOptions): Pr
         }
       });
     }
+    // A stop decided here takes effect after the next poll returns, at most
+    // `timeoutSec` later: commands that arrive meanwhile are still handled.
+    scheduleCycle();
   }
 
   await queue;

@@ -5,10 +5,12 @@
   "type": "module",
   "description": "Binance Square trending bot — perspective-first, human-approved",
   "scripts": {
+    "start": "tsx src/scripts/run.ts",
     "dry-run": "tsx src/scripts/dry-run.ts",
     "db:init": "tsx src/scripts/db-init.ts",
     "zalo:setup": "tsx src/scripts/zalo-setup.ts",
     "check:image-route": "tsx src/scripts/image-route-check.ts",
+    "check:approval": "tsx src/scripts/approval-check.ts",
     "lint": "eslint src tests",
     "test": "vitest run",
     "test:watch": "vitest",

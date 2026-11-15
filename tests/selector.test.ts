@@ -260,6 +260,25 @@ describe('recordSelection', () => {
     expect(row.source_ref).toBeNull();
     expect(JSON.parse(row.rejected_notes).length).toBeGreaterThan(0);
   });
+
+  it('keeps the perspective summary for the approval card', () => {
+    const result = selectPerspective({
+      trend: trend(),
+      allTrends: [trend()],
+      angles: [angle()],
+      lenses: [lens()],
+      lensEvidence: { 'settlement-desk': GOOD_EVIDENCE },
+      now: NOW,
+    });
+    if (result.outcome === 'stop') throw new Error('expected a perspective');
+
+    recordSelection(db, 1, result, 'observe');
+
+    const row = db.prepare('SELECT perspective_summary FROM selections').get() as {
+      perspective_summary: string | null;
+    };
+    expect(row.perspective_summary).toBe(result.perspective.summary);
+  });
 });
 
 describe('consensus tension hygiene', () => {

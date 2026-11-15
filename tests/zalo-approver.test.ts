@@ -160,6 +160,31 @@ describe('parseCommand', () => {
     expect(parseCommand('b 3')).toEqual({ action: 'reject', reason: 'facts' });
   });
 
+  it('accepts the footer label copied after a command, and nothing else after it', () => {
+    // 2026-11-15: the owner copied "a AC new visual" from the first footer.
+    expect(parseCommand('a AC new visual')).toEqual({ action: 'newVisual', code: 'AC' });
+    expect(parseCommand('a K7 · new visual')).toEqual({ action: 'newVisual', code: 'K7' });
+    expect(parseCommand('a K7 (new visual)')).toEqual({ action: 'newVisual', code: 'K7' });
+    expect(parseCommand('d K7 publish')).toEqual({ action: 'publish', code: 'K7' });
+    expect(parseCommand('D K7 · Publish')).toEqual({ action: 'publish', code: 'K7' });
+    expect(parseCommand('v K7 rewrite')).toEqual({ action: 'rewrite', code: 'K7' });
+    expect(parseCommand('b K7 3 reject')).toEqual({ action: 'reject', code: 'K7', reason: 'facts' });
+    expect(parseCommand('d publish')).toEqual({ action: 'publish' });
+    for (const bad of [
+      'd K7 đừng đăng',
+      'd K7 rewrite',
+      'a K7 visual',
+      'a K7 new',
+      'v K7 publish',
+      'd K7 publish now',
+      'd K7 3 publish',
+      'b K7 reject 3',
+      'd dạ publish',
+    ]) {
+      expect(parseCommand(bad), bad).toBeNull();
+    }
+  });
+
   it('parses code-less commands for single-draft shorthand', () => {
     expect(parseCommand('d')).toEqual({ action: 'publish' });
     expect(parseCommand('Đăng')).toEqual({ action: 'publish' });
@@ -361,13 +386,21 @@ describe('zalo-approver and approval-store', () => {
 
       // Footer uses the real code and lists the six numbered reasons.
       const footerLines = fake.calls[2]!.text.split('\n');
-      expect(footerLines[0]).toBe(
-        `[${code}] Reply: d ${code} publish · v ${code} rewrite · a ${code} new visual · b ${code} <n> reject`,
-      );
+      expect(footerLines.slice(0, 5)).toEqual([
+        `[${code}] Reply with one of:`,
+        `d ${code} · publish`,
+        `v ${code} · rewrite`,
+        `a ${code} · new visual`,
+        `b ${code} 1-6 · reject, with a reason:`,
+      ]);
       for (let i = 0; i < REJECT_REASONS.length; i++) {
-        expect(footerLines[1]).toContain(`${i + 1}`);
-        expect(footerLines[1]).toContain(REJECT_REASONS[i]!.label);
+        expect(footerLines[5]).toContain(`${i + 1}`);
+        expect(footerLines[5]).toContain(REJECT_REASONS[i]!.label);
       }
+      // Every footer line, copied back whole, is the command it describes.
+      expect(parseCommand(footerLines[1]!)).toEqual({ action: 'publish', code });
+      expect(parseCommand(footerLines[2]!)).toEqual({ action: 'rewrite', code });
+      expect(parseCommand(footerLines[3]!)).toEqual({ action: 'newVisual', code });
 
       for (const c of fake.calls) {
         expect(c.text.length).toBeLessThanOrEqual(1900);
@@ -401,7 +434,7 @@ describe('zalo-approver and approval-store', () => {
       expect(fake.calls[0]!.text.endsWith('\n(no image)')).toBe(true);
       expect(fake.calls[1]!.text).toBe(chunk1);
       expect(fake.calls[2]!.text).toBe(chunk2);
-      expect(fake.calls[3]!.text).toContain(`[${code}] Reply: d ${code} publish`);
+      expect(fake.calls[3]!.text).toContain(`[${code}] Reply with one of:\nd ${code} · publish`);
 
       for (const c of fake.calls) {
         expect(c.text.length).toBeLessThanOrEqual(1900);
@@ -480,7 +513,8 @@ describe('zalo-approver and approval-store', () => {
       const id = insertDraft();
 
       await handleUpdate(deps, textUpdate('hello there'));
-      expect(fake.calls.at(-1)?.text).toBe('Unknown command. Send ? for help.');
+      expect(fake.calls.at(-1)?.text).toMatch(/^Unknown command\.\nCommands \(CODE is the draft code/);
+      expect(fake.calls.at(-1)?.text).toContain('a CODE · new visual');
 
       await handleUpdate(deps, textUpdate('?'));
       const helpReply = fake.calls.at(-1)!.text;
@@ -582,6 +616,43 @@ describe('zalo-approver and approval-store', () => {
         `Publishing ${code}…`,
         `Publish failed for ${code}: square is down`,
       ]);
+    });
+
+    it('answers in one line, without touching the draft, while publishing is blocked', async () => {
+      const id = insertDraft();
+      const code = draftCode(id);
+      deps.publishBlocked = () => 'publishing is off for this run';
+
+      await handleUpdate(deps, textUpdate(`d ${code}`));
+
+      expect(published).not.toHaveBeenCalled();
+      expect(row(id)).toEqual({ status: 'pending', reject_reason: null, resolved_at: null });
+      expect(fake.calls.map((c) => c.text)).toEqual([`${code}: publishing is off for this run`]);
+    });
+
+    it('appends the note onPublish returns, such as the post link', async () => {
+      const id = insertDraft();
+      const code = draftCode(id);
+      published.mockResolvedValueOnce('https://square.example/p/991');
+
+      await handleUpdate(deps, textUpdate(`d ${code}`));
+
+      expect(fake.calls.at(-1)?.text).toBe(`Published ${code}: https://square.example/p/991`);
+    });
+
+    it('keeps the draft approved, never back on the queue, when the publish result is uncertain', async () => {
+      const id = insertDraft();
+      const code = draftCode(id);
+      published.mockRejectedValueOnce(Object.assign(new Error('Square did not answer clearly'), { uncertain: true }));
+
+      await handleUpdate(deps, textUpdate(`d ${code}`));
+      expect(row(id).status).toBe('approved');
+      expect(fake.calls.at(-1)?.text).toBe(
+        `${code} may or may not be posted: Square did not answer clearly. It will not be offered again.`,
+      );
+
+      await handleUpdate(deps, textUpdate(`d ${code}`));
+      expect(published).toHaveBeenCalledTimes(1);
     });
 
     it('continues to run onPublish and keeps draft approved even if the reply helper throws', async () => {
@@ -745,6 +816,50 @@ describe('zalo-approver and approval-store', () => {
       await pollLoop(deps, { signal: controller.signal, sleep, timeoutSec: 20 });
 
       expect(sleeps).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 5_000]);
+    });
+
+    it('pollLoop runs onCycle after each poll, behind that poll\'s commands, and stops when it returns true', async () => {
+      const id = insertDraft();
+      const code = draftCode(id);
+      const controller = new AbortController();
+      const events: string[] = [];
+      published.mockImplementation(async () => {
+        events.push('publish:start');
+        await new Promise((r) => setTimeout(r, 5));
+        events.push('publish:end');
+      });
+      let polls = 0;
+      fake.api.getUpdates.mockImplementation(async () => {
+        polls += 1;
+        // Safety net so a broken stop cannot hang the suite.
+        if (polls > 50) controller.abort();
+        await new Promise((r) => setTimeout(r, 1));
+        return polls === 1 ? [textUpdate(`d ${code}`)] : [];
+      });
+      const onCycle = vi.fn(async () => {
+        events.push(`cycle:${row(id).status}`);
+        return row(id).status === 'approved' && events.includes('publish:end');
+      });
+
+      await pollLoop(deps, { signal: controller.signal, timeoutSec: 20, onCycle });
+
+      expect(controller.signal.aborted).toBe(false);
+      expect(events.slice(0, 3)).toEqual(['publish:start', 'publish:end', 'cycle:approved']);
+      expect(onCycle).toHaveBeenCalledTimes(1);
+    });
+
+    it('pollLoop still runs onCycle while getUpdates keeps failing', async () => {
+      const controller = new AbortController();
+      fake.api.getUpdates.mockRejectedValue(new Error('network down'));
+      let cycles = 0;
+      const onCycle = vi.fn(async () => {
+        cycles += 1;
+        return cycles === 3;
+      });
+
+      await pollLoop(deps, { signal: controller.signal, sleep: async () => {}, timeoutSec: 20, onCycle });
+
+      expect(onCycle).toHaveBeenCalledTimes(3);
     });
 
     it('pollLoop starts the next getUpdates while a handler is running and runs queued commands serially in order', async () => {

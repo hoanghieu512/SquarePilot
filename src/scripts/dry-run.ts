@@ -112,7 +112,7 @@ async function main(): Promise<void> {
     logger.info('Stage: data gate            - pass --live-collect');
     logger.info('Stage: draft + gates        - pass --live-collect --live-draft');
   }
-  logger.info('Stage: zalo approval        - pending Phase 6');
+  logger.info('Stage: zalo approval        - `npm start` (add --publish to post for real)');
 
   if (liveLlm) {
     const llm = new LlmClient({

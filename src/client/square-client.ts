@@ -25,9 +25,16 @@ export const MAX_IMAGES = 4;
 export const DEFAULT_KEY_FILE = path.join(os.homedir(), '.config', 'binance-square', 'openapi-key');
 
 export class SquareError extends Error {
+  /**
+   * @param ambiguous true when the request may have been processed anyway: the
+   * connection failed after sending, or a gateway answered with something
+   * other than Square's JSON. For `/content/add` that means the post may be
+   * live, so the caller must not offer the draft for a second attempt.
+   */
   constructor(
     message: string,
     readonly code?: string,
+    readonly ambiguous = false,
   ) {
     super(message);
     this.name = 'SquareError';
@@ -92,7 +99,11 @@ export function createSquareClient(opts: SquareClientOptions): SquareClient {
         body: JSON.stringify(body),
       });
     } catch (err) {
-      throw new SquareError(`Request to ${endpoint} failed: ${redact(err instanceof Error ? err.message : String(err))}`);
+      throw new SquareError(
+        `Request to ${endpoint} failed: ${redact(err instanceof Error ? err.message : String(err))}`,
+        undefined,
+        true,
+      );
     }
   }
 
@@ -102,7 +113,7 @@ export function createSquareClient(opts: SquareClientOptions): SquareClient {
     try {
       json = JSON.parse(raw) as Envelope;
     } catch {
-      throw new SquareError(`${endpoint} returned non-JSON (HTTP ${res.status})`);
+      throw new SquareError(`${endpoint} returned non-JSON (HTTP ${res.status})`, undefined, true);
     }
     if (json.code !== OK_CODE) {
       throw new SquareError(`${endpoint} failed [${json.code}]: ${redact(json.message ?? 'no message')}`, json.code);

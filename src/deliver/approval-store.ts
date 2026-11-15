@@ -1,6 +1,8 @@
 import type Database from 'better-sqlite3';
 
-const DEFAULT_TTL_HOURS = 6;
+/** A draft nobody answers within this window expires and is never posted. */
+export const APPROVAL_TTL_HOURS = 6;
+const DEFAULT_TTL_HOURS = APPROVAL_TTL_HOURS;
 
 export function statusOf(db: Database.Database, draftId: number): string | null {
   const r = db.prepare('SELECT status FROM drafts WHERE id = ?').get(draftId) as

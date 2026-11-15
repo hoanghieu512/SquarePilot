@@ -169,6 +169,19 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE drafts ADD COLUMN fact_gate TEXT;
     `,
   },
+  {
+    version: 4,
+    name: 'approval_wiring',
+    sql: `
+      -- The Square-hosted copy of the card. Uploaded once when the draft goes
+      -- to the approval chat (Zalo only takes a photo by URL) and reused when
+      -- the post is published, so the image shown is the image posted.
+      ALTER TABLE visuals ADD COLUMN image_url TEXT;
+      -- The perspective in words, for the approval card. source_ref alone is a
+      -- file path or a lens id.
+      ALTER TABLE selections ADD COLUMN perspective_summary TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

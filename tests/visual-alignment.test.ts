@@ -64,4 +64,27 @@ describe('alignVisualToDraft', () => {
   it('does not take the current year as the focal number', () => {
     expect(alignVisualToDraft(base, 'The 2026 outlook is unclear.', opts).ok).toBe(false);
   });
+
+  describe('a new visual for the same draft', () => {
+    const body = 'Volume rose 12% while price held $68k. Out of 4,200 wallets, 31% sold.';
+
+    it('puts a different figure on the panel than the ones already shown', () => {
+      const r = alignVisualToDraft({ ...base, focal_number: '12%' }, body, { ...opts, excludeFocal: ['12%'] });
+      expect(r.ok && r.schema.focal_number).toBe('31%');
+    });
+
+    it('walks down the preference list as figures are used up', () => {
+      const r = alignVisualToDraft({ ...base, focal_number: '31%' }, body, {
+        ...opts,
+        excludeFocal: ['12%', '31%'],
+      });
+      expect(r.ok && r.schema.focal_number).toBe('$68k');
+    });
+
+    it('refuses once every figure that fits has been shown, naming them', () => {
+      const r = alignVisualToDraft(base, body, { ...opts, excludeFocal: ['12%', '31%', '$68k', '4,200'] });
+      expect(r.ok).toBe(false);
+      expect(!r.ok && r.reason).toMatch(/no other figure.*12%, 31%, \$68k, 4,200/);
+    });
+  });
 });
