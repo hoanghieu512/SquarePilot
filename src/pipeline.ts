@@ -93,8 +93,14 @@ export async function draftAndDraw(
   // own. Read per draft, so a rewrite sees a post published meanwhile.
   const history = readRecentPosts(db, path.join(config.vaultDir, 'outputs', 'square'));
 
+  // The model calls of this compose are tied to the draft afterwards, since
+  // its id only exists once it is recorded. Every call after the mark belongs
+  // to this compose unless a dry run is drafting at the same moment, which
+  // would only blur the cost figure.
+  const { mark } = db.prepare('SELECT COALESCE(MAX(id), 0) AS mark FROM llm_calls').get() as { mark: number };
   const draft = await composeDraft(context.request, { llm: options.llm, recent: history, now });
   const draftId = recordDraft(db, context.selectionId, draft);
+  db.prepare('UPDATE llm_calls SET draft_id = ? WHERE id > ? AND draft_id IS NULL').run(draftId, mark);
   logger.info(
     draft.ok
       ? `Draft ready: ${draft.lengths.nfc} NFC / ${draft.lengths.nfd} NFD via ${draft.tier}`

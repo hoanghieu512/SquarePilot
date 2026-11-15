@@ -9,6 +9,7 @@ import { createZaloApi } from '../deliver/zalo-api.js';
 import { statusOf } from '../deliver/approval-store.js';
 import { runApprovalSession } from '../deliver/approval-session.js';
 import { createSessionHandlers } from '../deliver/session-handlers.js';
+import { writeUnpublishedDraft } from '../deliver/vault-writer.js';
 import { acquireSessionLock } from '../utils/session-lock.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -69,7 +70,11 @@ async function main(): Promise<void> {
     }
 
     const contexts = new Map<number, DraftContext>([[draftId, result.context]]);
+    const modelFor = (tier: string): string =>
+      tier === 'paid' ? config.modelPaid : tier === 'free' ? config.modelFree : tier;
     const handlers = createSessionHandlers({
+      vaultDir: config.vaultDir,
+      modelFor,
       db,
       square,
       publishEnabled,
@@ -92,7 +97,7 @@ async function main(): Promise<void> {
           chatId,
           now,
           square,
-          modelFor: (tier) => (tier === 'paid' ? config.modelPaid : tier === 'free' ? config.modelFree : tier),
+          modelFor,
           publishEnabled,
           handlers,
           signal: controller.signal,
@@ -100,6 +105,16 @@ async function main(): Promise<void> {
         [draftId],
       );
       logger.info(`Session over (${summary.reason}): ${summary.drafts.map((d) => `${d.code} ${d.status}`).join(', ')}`);
+      // Offered and not published: kept for the approval-rate stats.
+      for (const d of summary.drafts.filter((x) => x.status !== 'approved')) {
+        try {
+          writeUnpublishedDraft(db, d.id, { vaultDir: config.vaultDir, now: now(), modelFor });
+        } catch (err) {
+          logger.warn(`Could not keep draft ${d.code} in the vault`, {
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     } catch (err) {
       // The draft could not be put in front of the owner: it must not sit in
       // the queue where a later "d" could post it unseen.

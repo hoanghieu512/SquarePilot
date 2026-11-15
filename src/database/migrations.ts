@@ -192,6 +192,14 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE visuals ADD COLUMN offered_at TEXT;
     `,
   },
+  {
+    version: 6,
+    name: 'post_share_link',
+    sql: `
+      -- The link Square returns for a published post, for the vault copy.
+      ALTER TABLE posts ADD COLUMN share_link TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

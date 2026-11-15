@@ -112,10 +112,10 @@ export async function publishDraft(deps: PublisherDeps, draftId: number): Promis
     deps.db.transaction(() => {
       deps.db
         .prepare(
-          `INSERT INTO posts (draft_id, square_post_id, content_snapshot, hashtag, png_path, published_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO posts (draft_id, square_post_id, content_snapshot, hashtag, png_path, share_link, published_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(draftId, squarePostId, draft.body, draft.hashtag, visual.pngPath, at.toISOString());
+        .run(draftId, squarePostId, draft.body, draft.hashtag, visual.pngPath, shareLink, at.toISOString());
       // Lens cooldowns count posts, not drafts: a rejected draft must not use
       // the lens up. Angles and bank anchors are marked in the vault by the
       // vault writer, from this same posts row.

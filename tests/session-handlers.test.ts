@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { DraftContext, DrawnDraft } from '../src/pipeline.js';
 import { PublishingDisabledError } from '../src/deliver/publisher.js';
@@ -111,6 +114,36 @@ describe('createSessionHandlers', () => {
   });
 
   describe('publish', () => {
+    const square = {
+      publishPost: vi.fn(async () => ({ status: 'published' as const, id: '991', shareLink: 'https://sq/p/991' })),
+    };
+
+    it('copies the live post into the vault and says where', async () => {
+      const vaultDir = mkdtempSync(join(tmpdir(), 'sp-hvault-'));
+      mkdirSync(join(vaultDir, 'outputs', 'square'), { recursive: true });
+      const png = join(vaultDir, 'card.png');
+      writeFileSync(png, 'png');
+      const id = seedDraft(db, { status: 'approved' });
+      seedVisual(db, id, { pngPath: png });
+
+      const note = await handlers({ square, publishEnabled: true, vaultDir }).publish(id);
+
+      expect(note).toBe('https://sq/p/991\nvault: 2026-11-15-btc-holds-square-post.md');
+      expect(existsSync(join(vaultDir, 'outputs', 'square', '2026-11-15-btc-holds-square-post.md'))).toBe(true);
+    });
+
+    it('reports a failed vault copy without throwing, because the post is already live', async () => {
+      const vaultDir = join(mkdtempSync(join(tmpdir(), 'sp-hvault-')), 'file-not-dir');
+      writeFileSync(vaultDir, 'x');
+      const id = seedDraft(db, { status: 'approved' });
+      seedVisual(db, id);
+
+      const note = await handlers({ square, publishEnabled: true, vaultDir }).publish(id);
+
+      expect(note).toMatch(/^https:\/\/sq\/p\/991\nvault copy failed: /);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM posts').get()).toEqual({ n: 1 });
+    });
+
     it('goes through the publisher, so the off switch holds', async () => {
       const id = seedDraft(db, { status: 'approved' });
       seedVisual(db, id);

@@ -4,6 +4,10 @@ import type { DraftContext, DrawnDraft } from '../pipeline.js';
 import { renderNewVisual, type RenderFn } from '../visual/draft-visual.js';
 import type { SessionHandlers } from './approval-session.js';
 import { publishDraft } from './publisher.js';
+import { writePublishedPost } from './vault-writer.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('session-handlers');
 
 /** Rewrites one run may spend on the owner's "v": each costs up to three model calls. */
 export const MAX_REWRITES = 2;
@@ -20,6 +24,9 @@ export interface HandlerDeps {
   draw(context: DraftContext): Promise<DrawnDraft>;
   maxRewrites?: number;
   render?: RenderFn;
+  /** Where published posts are copied (see `writePublishedPost`). Omit to skip. */
+  vaultDir?: string;
+  modelFor?(tier: string): string;
 }
 
 export function createSessionHandlers(deps: HandlerDeps): SessionHandlers {
@@ -32,7 +39,20 @@ export function createSessionHandlers(deps: HandlerDeps): SessionHandlers {
         { db: deps.db, square: deps.square, now: deps.now, enabled: deps.publishEnabled },
         draftId,
       );
-      return out.note;
+      if (!deps.vaultDir) return out.note;
+      // The post is live from here on: nothing below may throw, or the
+      // approver would put a published draft back on the queue.
+      try {
+        const vault = writePublishedPost(deps.db, draftId, {
+          vaultDir: deps.vaultDir,
+          modelFor: deps.modelFor ?? ((tier) => tier),
+        });
+        return [out.note, `vault: ${vault.mdPath.split('/').pop()}`, ...vault.notes].join('\n');
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.error('Published, but the vault copy failed', { draftId, reason });
+        return `${out.note}\nvault copy failed: ${reason}`;
+      }
     },
 
     async rewrite(draftId) {
