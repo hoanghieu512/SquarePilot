@@ -63,6 +63,20 @@ export function assertCaps(schema: VisualSchema): void {
 
 type Node = { type: string; props: Record<string, unknown> };
 
+/** Images the layout draws, already loaded: the layout itself reads no files. */
+export interface CardAssets {
+  /** The lens icon as a data URL. */
+  icon?: string;
+}
+
+/** Icon edge in pixels. */
+export const ICON_SIZE = 220;
+/**
+ * Longest focal number that shares its row with the icon. At 140 px, seven
+ * Zodiak Black characters ("283,050", "$70,000") fill what the icon leaves.
+ */
+export const ICON_MAX_FOCAL = 7;
+
 const el = (type: string, props: Record<string, unknown>): Node => ({ type, props });
 
 function statTile(tile: StatTile, mood: Mood): Node {
@@ -113,7 +127,7 @@ function statTile(tile: StatTile, mood: Mood): Node {
  * each one, which is not how the hand-made cards in `outputs/visuals/square`
  * are built - those are dense.
  */
-export function buildCard(schema: VisualSchema): Node {
+export function buildCard(schema: VisualSchema, assets: CardAssets = {}): Node {
   assertCaps(schema);
   const mood = MOOD_STYLES[schema.mood_variant as Mood] ?? MOOD_STYLES.neutral;
 
@@ -181,31 +195,54 @@ export function buildCard(schema: VisualSchema): Node {
     children: schema.focal_number,
   });
 
+  // The lens icon sits left of the number, only when the number is short
+  // enough to share the row; a longer number keeps the panel to itself.
+  const showIcon = Boolean(assets.icon) && schema.focal_number.length <= ICON_MAX_FOCAL;
+
+  // What the number is, in the post's words. Up to two lines, right-aligned
+  // under the number it explains.
   const subline = el('div', {
     style: {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      textAlign: 'right',
+      maxWidth: showIcon ? 560 : 760,
       fontFamily: 'Label',
-      fontSize: 26,
+      fontSize: 28,
       fontWeight: 700,
-      color: PALETTE.grayBrown,
-      letterSpacing: 2,
+      color: PALETTE.ink,
+      letterSpacing: 1,
+      lineHeight: 1.3,
       textTransform: 'uppercase',
     },
     children: schema.focal_subline ?? '',
   });
 
+  const numberBlock = el('div', {
+    style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 14 },
+    children: [...(mood.stamp ? [stamp] : []), focal, ...(schema.focal_subline ? [subline] : [])],
+  });
+
+  const icon = el('img', {
+    src: assets.icon,
+    width: ICON_SIZE,
+    height: ICON_SIZE,
+    style: { width: ICON_SIZE, height: ICON_SIZE, objectFit: 'contain' },
+  });
+
   const panel = el('div', {
     style: {
       display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'flex-end',
-      justifyContent: 'center',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: showIcon ? 'space-between' : 'flex-end',
       flexGrow: 1,
-      padding: '52px 56px',
+      padding: '48px 56px',
       border: `5px solid ${PALETTE.ink}`,
       backgroundColor: PALETTE.paperShadow,
-      gap: 12,
+      gap: 32,
     },
-    children: [...(mood.stamp ? [stamp] : []), focal, ...(schema.focal_subline ? [subline] : [])],
+    children: showIcon ? [icon, numberBlock] : [numberBlock],
   });
 
   const tiles = el('div', {

@@ -244,6 +244,8 @@ export async function runUpToDraft(
       (anchor.mayNameJob ? '' : ', job mention not allowed (cap in use)'),
   );
 
+  const lensIcon = perspective.kind === 'lens' ? lenses.find((l) => l.id === perspective.ref)?.icon : undefined;
+
   // The data gate passed for `chosen`, or it would not have been chosen.
   const context: DraftContext = {
     request: {
@@ -255,7 +257,11 @@ export async function runUpToDraft(
       anchor,
     },
     selectionId: chosen.selectionId,
-    baseSchema: chosen.dataGate?.ok ? chosen.dataGate.available : {},
+    baseSchema: {
+      ...(chosen.dataGate?.ok ? chosen.dataGate.available : {}),
+      // A post from a lens carries that lens's icon; angles and tensions have none.
+      ...(lensIcon ? { icon: lensIcon } : {}),
+    },
   };
 
   const drawn = await draftAndDraw(db, config, context, {

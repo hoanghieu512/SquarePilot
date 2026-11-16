@@ -14,11 +14,18 @@ export interface VisualSchema {
   headline_1: string;
   headline_2?: string;
   focal_number: string;
+  /** What the focal number is, in the post's own words (see `alignVisualToDraft`). */
   focal_subline?: string;
   stat_tiles: StatTile[];
   risk_bar?: string;
   footer_source: string;
   brand_mark: string;
+  /**
+   * Absolute path of the lens icon drawn beside the focal number, when the
+   * post comes from a lens that declares one. Not part of §7: the guidelines
+   * describe text fields only.
+   */
+  icon?: string;
 }
 
 /** §7: missing two or more of these means stop, do not invent numbers. */
@@ -34,7 +41,10 @@ export type DataGateResult =
 export const CAPS = {
   headline_line: 28,
   focal_number: 12,
-  focal_subline: 20,
+  // Raised from 20 on 2026-11-16: the line now says what the focal number
+  // is, quoted from the post ("views across 2,344 posts"), and a bare number
+  // with no such line read as stranded. It wraps to two lines on the card.
+  focal_subline: 40,
   stat_value: 8,
   bar: 45,
 } as const;

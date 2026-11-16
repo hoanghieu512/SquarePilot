@@ -80,6 +80,19 @@ describe('readLenses', () => {
     expect(readLenses(dir)).toHaveLength(0);
   });
 
+  it('resolves a declared icon under the icons folder, by file name only', () => {
+    fs.writeFileSync(path.join(dir, 'a.md'), lensFile('alpha', 'icon: alpha.png'));
+    fs.writeFileSync(path.join(dir, 'b.md'), lensFile('beta', 'icon: ../../elsewhere/beta.png'));
+    fs.writeFileSync(path.join(dir, 'c.md'), lensFile('gamma'));
+
+    const byId = Object.fromEntries(readLenses(dir).map((l) => [l.id, l.icon]));
+
+    expect(byId.alpha).toBe(path.join(dir, 'icons', 'alpha.png'));
+    // A path in the field cannot point outside the icons folder.
+    expect(byId.beta).toBe(path.join(dir, 'icons', 'beta.png'));
+    expect(byId.gamma).toBeUndefined();
+  });
+
   it('returns an empty bank instead of throwing when the directory is absent', () => {
     expect(readLenses(path.join(dir, 'missing'))).toEqual([]);
   });

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { LayoutError, VISUAL_TYPES, assertCaps, buildCard } from '../src/visual/layout.js';
-import { MAX_BYTES, renderVisual } from '../src/visual/render.js';
+import { MAX_BYTES, loadIcon, renderVisual } from '../src/visual/render.js';
 import { CANVAS, MOOD_STYLES, PALETTE } from '../src/visual/palette.js';
 import { fontDir, loadFonts } from '../src/visual/fonts.js';
 import { CAPS, type VisualSchema } from '../src/compose/data-gate.js';
@@ -166,6 +166,59 @@ describe('buildCard', () => {
 
   it('omits the bottom bar when there is no line for it', () => {
     expect(JSON.stringify(buildCard(schema({ risk_bar: undefined })))).not.toContain('THE DATE IS FIXED');
+  });
+});
+
+describe('the focal panel', () => {
+  type N = { type: string; props: { children?: unknown; src?: string } };
+  function nodes(root: unknown): N[] {
+    const out: N[] = [];
+    const walk = (n: unknown): void => {
+      if (!n || typeof n !== 'object') return;
+      if (Array.isArray(n)) return n.forEach(walk);
+      const node = n as N;
+      out.push(node);
+      walk(node.props?.children);
+    };
+    walk(root);
+    return out;
+  }
+  const ICON = 'data:image/png;base64,AAAA';
+
+  it('draws the lens icon beside a short number', () => {
+    const imgs = nodes(buildCard(schema(), { icon: ICON })).filter((n) => n.type === 'img');
+    expect(imgs.map((n) => n.props.src)).toEqual([ICON]);
+  });
+
+  it('leaves the icon out when the number needs the whole row, or when there is none', () => {
+    expect(nodes(buildCard(schema({ focal_number: '1,234,567' }), { icon: ICON })).some((n) => n.type === 'img')).toBe(false);
+    expect(nodes(buildCard(schema())).some((n) => n.type === 'img')).toBe(false);
+  });
+
+  it('puts the line that says what the number is under it', () => {
+    const texts = nodes(buildCard(schema({ focal_subline: 'views across 2,344 posts' }))).map((n) => n.props.children);
+    expect(texts).toContain('views across 2,344 posts');
+  });
+
+  it('accepts a 40-character line and refuses a longer one', () => {
+    expect(() => buildCard(schema({ focal_subline: 'x'.repeat(40) }))).not.toThrow();
+    expect(() => buildCard(schema({ focal_subline: 'x'.repeat(41) }))).toThrow(/focal_subline is 41 chars, cap is 40/);
+  });
+
+  it('renders a card with an icon and a two-line caption within the upload limit', async () => {
+    // A real 1x1 PNG, so satori decodes an actual image.
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    const out = await renderVisual(
+      schema({ focal_subline: 'wallets holding through the drawdown', icon: undefined }),
+    );
+    expect(out.bytes).toBeLessThan(MAX_BYTES);
+    expect(loadIcon(undefined)).toBeUndefined();
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sp-icon-')), 'icon.png');
+    fs.writeFileSync(file, Buffer.from(png, 'base64'));
+    expect(loadIcon(file)).toBe(`data:image/png;base64,${png}`);
+    expect(loadIcon('/nope/missing.png')).toBeUndefined();
+    const withIcon = await renderVisual(schema({ focal_subline: 'views across 2,344 posts', icon: file }));
+    expect(withIcon.bytes).toBeLessThan(MAX_BYTES);
   });
 });
 

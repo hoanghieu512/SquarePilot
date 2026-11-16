@@ -21,6 +21,12 @@ export interface Lens {
   useCount: number;
   /** Questions the lens generates, lifted from the file body. */
   questions: string[];
+  /**
+   * Absolute path of the lens icon drawn on the card, from `icon:` in the
+   * frontmatter (a file name in `<lenses>/icons/`). Undefined when the lens
+   * declares none.
+   */
+  icon?: string;
 }
 
 /**
@@ -92,6 +98,9 @@ export function readLenses(lensesDir: string): Lens[] {
       lastUsed: null,
       useCount: 0,
       questions: extractQuestions(body),
+      // Icons live next to the lenses, one file per lens, declared by name so
+      // a new lens brings its own icon without a code change.
+      ...(asString(front.icon) ? { icon: path.join(lensesDir, 'icons', path.basename(asString(front.icon)!)) } : {}),
     });
   }
   return lenses;

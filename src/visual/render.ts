@@ -35,8 +35,22 @@ export class RenderError extends Error {
  * pipeline would come out mangled. The model's only job upstream is to fill the
  * schema; the drawing is deterministic.
  */
+/**
+ * The lens icon as a data URL, or nothing. A missing file draws the card
+ * without it rather than failing: there is no post without a card, and the
+ * icon is decoration.
+ */
+export function loadIcon(file: string | undefined): string | undefined {
+  if (!file) return undefined;
+  if (!fs.existsSync(file)) {
+    logger.warn(`Icon not found, drawing the card without it: ${file}`);
+    return undefined;
+  }
+  return `data:image/png;base64,${fs.readFileSync(file).toString('base64')}`;
+}
+
 export async function renderVisual(schema: VisualSchema): Promise<RenderResult> {
-  const svg = await satori(buildCard(schema) as never, {
+  const svg = await satori(buildCard(schema, { icon: loadIcon(schema.icon) }) as never, {
     width: CANVAS.width,
     height: CANVAS.height,
     fonts: loadFonts(),

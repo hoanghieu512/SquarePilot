@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { alignVisualToDraft } from '../src/compose/visual-alignment.js';
+import { alignVisualToDraft, focalCaption } from '../src/compose/visual-alignment.js';
+import { extractFigures } from '../src/compose/fact-figures.js';
 import type { VisualSchema } from '../src/compose/data-gate.js';
 
 const base: Partial<VisualSchema> = {
@@ -16,7 +17,8 @@ const opts = { currentYear: 2026 };
 describe('alignVisualToDraft', () => {
   it('keeps a card exactly as is when the draft writes the same figures', () => {
     const r = alignVisualToDraft(base, 'Price sits near $68k and 2.5% up on the month.', opts);
-    expect(r).toEqual({ ok: true, schema: base, changed: [] });
+    // Unchanged but for the line that says what the number is.
+    expect(r).toEqual({ ok: true, schema: { ...base, focal_subline: 'Price sits near' }, changed: [] });
   });
 
   it("writes the card's figures the way the draft writes them", () => {
@@ -63,6 +65,78 @@ describe('alignVisualToDraft', () => {
 
   it('does not take the current year as the focal number', () => {
     expect(alignVisualToDraft(base, 'The 2026 outlook is unclear.', opts).ok).toBe(false);
+  });
+
+  describe('the line under the focal number', () => {
+    // 2026-11-16: "283,050" sat alone in the panel, the first thing a reader
+    // sees and the one thing on the card that did not say what it was.
+    const fig = (body: string, raw: string) => {
+      const f = extractFigures(body, opts).find((x) => x.raw === raw);
+      if (!f) throw new Error(`no figure ${raw}`);
+      return f;
+    };
+
+    it('quotes the words after a count that name it', () => {
+      const body = '#T\n\nThere are 283,050 views across 2,344 posts. Nobody asked why.';
+      expect(focalCaption(body, fig(body, '283,050'))).toBe('views across 2,344 posts');
+    });
+
+    it('quotes the words before a figure when the words after do not name it', () => {
+      const body = 'Volume rose 12% while price went nowhere.';
+      expect(focalCaption(body, fig(body, '12%'))).toBe('Volume rose');
+      const ppi = 'Here is the print: annual came in at 6.5%, and nobody moved.';
+      expect(focalCaption(ppi, fig(ppi, '6.5%'))).toBe('annual came in');
+      const btc = 'It landed after $BTC had already slid below $70,000, its lowest since August.';
+      // 43 characters before the figure: the first word goes, the rest fits in 40.
+      expect(focalCaption(btc, fig(btc, '$70,000'))).toBe('landed after $BTC had already slid below');
+    });
+
+    it('takes a comparison after the figure, which reads whole under the number', () => {
+      // "6.5% / ANNUAL CAME IN" said less than "6.5% / AGAINST THE EXPECTED 6.6%".
+      const ppi = 'Here is the print: annual came in at 6.5% against the expected 6.6%.';
+      expect(focalCaption(ppi, fig(ppi, '6.5%'))).toBe('against the expected 6.6%');
+      const fell = 'Open interest is 4.2B down from 5.1B a week ago.';
+      const f = extractFigures(fell, opts)[0]!;
+      expect(focalCaption(fell, f)).not.toMatch(/^Open interest/);
+    });
+
+    it('drops a cited tile whose figure the caption already gives', () => {
+      const body = 'There are 283,050 views across 2,344 posts.';
+      const r = alignVisualToDraft(
+        { ...base, focal_number: '283,050', stat_tiles: [{ label: 'views', value: '283.1K' }, { label: 'cited', value: '2,344' }] },
+        body,
+        opts,
+      );
+      expect(r.ok && r.schema.stat_tiles).toEqual([{ label: 'views', value: '283.1K' }]);
+    });
+
+    it('stops at the cap on a whole word, never on a dangling one', () => {
+      const body = 'Out of 4,200 wallets holding through the drawdown and the funding flip, 31% sold.';
+      const caption = focalCaption(body, fig(body, '4,200'))!;
+      expect(caption.length).toBeLessThanOrEqual(40);
+      expect(caption).toBe('wallets holding through the drawdown');
+    });
+
+    it('says nothing rather than quote the hashtag line', () => {
+      const body = '#BitcoinActiveSupplyInProfitDropsBelow45%\n\nBody.';
+      const f = extractFigures(body, opts)[0];
+      if (f) expect(focalCaption(body, f)).toBeUndefined();
+    });
+
+    it('is set by the alignment and follows the focal number when it changes', () => {
+      const body = 'There are 283,050 views across 2,344 posts. Volume rose 12% while price went nowhere.';
+      const first = alignVisualToDraft({ ...base, focal_number: '283,050', focal_subline: 'stale' }, body, opts);
+      expect(first.ok && first.schema.focal_subline).toBe('views across 2,344 posts');
+
+      const next = alignVisualToDraft(first.ok ? first.schema : base, body, { ...opts, excludeFocal: ['283,050'] });
+      expect(next.ok && next.schema.focal_number).toBe('12%');
+      expect(next.ok && next.schema.focal_subline).toBe('Volume rose');
+    });
+
+    it('keeps the lens icon through the alignment', () => {
+      const r = alignVisualToDraft({ ...base, icon: '/v/lenses/icons/calendar.png' }, 'Up 2.5% on the month.', opts);
+      expect(r.ok && r.schema.icon).toBe('/v/lenses/icons/calendar.png');
+    });
   });
 
   describe('a new visual for the same draft', () => {
