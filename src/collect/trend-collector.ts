@@ -101,6 +101,16 @@ export function filterTrends(
       });
       return;
     }
+    // The post reaches the topic only through the hashtag written in its text
+    // (the API has no hashtag field), and a hashtag in text ends at the first
+    // space: "#A Packed Week of ..." would post under "#A".
+    if (/\s/.test(trend.hashtag)) {
+      rejected.push({
+        hashtag: trend.hashtag,
+        reason: 'hashtag has spaces, so the post text could not carry it whole',
+      });
+      return;
+    }
     // Hashtags are case-insensitive on Square: the trends list shows CamelCase
     // while the hashtag page shows lowercase, and both resolve to one topic.
     if (used.has(trend.hashtag.toLowerCase())) {

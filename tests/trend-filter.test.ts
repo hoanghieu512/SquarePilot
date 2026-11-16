@@ -46,6 +46,19 @@ describe('trend storage and filtering', () => {
     expect(result.rejected[0]!.reason).toMatch(/0 views/);
   });
 
+  it('drops a hashtag with spaces, which the post text cannot carry whole', () => {
+    // 2026-11-16: "#A Packed Week of Earnings and Data Tests Markets" was
+    // chosen. The API has no hashtag field, the tag in the text routes the
+    // post, and text stops a hashtag at the first space.
+    const trends = [trend('#A Packed Week of Earnings and Data Tests Markets', 90_000, 1), trend('#Busy', 20_000, 2)];
+    const ids = storeTrends(db, trends, NOW);
+
+    const result = filterTrends(db, trends, ids, NOW, { now: CLOCK });
+
+    expect(result.eligible.map((t) => t.hashtag)).toEqual(['#Busy']);
+    expect(result.rejected[0]!.reason).toMatch(/hashtag has spaces/);
+  });
+
   it('uses a threshold high enough to exclude a freshly created topic', () => {
     expect(MIN_VIEW_COUNT).toBeGreaterThan(0);
   });
