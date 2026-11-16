@@ -114,6 +114,8 @@ Toàn bộ các biến môi trường trong `.env.example` và cách mã nguồn
 | `CONTENT_CREATOR_DIR` | Có | Không có | Đường dẫn tới thư mục bên ngoài chứa các file quy tắc giọng văn và nhân vật (`about-me.md`, `tone-guidelines.md`, `anti-ai-rules-en.md`). Thư mục phải tồn tại trên đĩa khi khởi động. |
 | `VAULT_DIR` | Có | Không có | Đường dẫn tới thư mục kho lưu trữ bên ngoài chứa `angles/`, `lenses/`, `anchor-bank.md` và `outputs/square/`. Thư mục phải tồn tại trên đĩa khi khởi động. |
 | `SQUAREPILOT_DB_PATH` | Không | `~/.squarepilot/squarepilot.db` | Đường dẫn tùy chỉnh tới file cơ sở dữ liệu SQLite cục bộ (đang để dưới dạng chú thích trong `.env.example`). |
+| `SQUAREPILOT_FONT_DIR` | Không | `~/.squarepilot/fonts` | Thư mục font của thẻ. Tải Zodiak và Azeret Mono (tùy chọn Bespoke Serif) từ fontshare.com, giải nén mỗi họ vào `<thư mục>/<họ>/` (`zodiak`, `azeret-mono`, `bespoke-serif`). Không commit file font vào repo: giấy phép ITF FFL cấm phân phối lại và cấm đổi định dạng. Thiếu file thì thẻ vẽ bằng Georgia và Courier New, có cảnh báo trong log. |
+| `SQUAREPILOT_FONT_SET` | Không | `zodiak-azeret` | Cặp font của thẻ: `zodiak-azeret`, `bespoke-serif-azeret` hoặc `system` (Georgia và Courier New). Font hệ thống luôn được nạp kèm để vẽ chữ mà font chính thiếu, như dấu tiếng Việt. |
 | `LOG_LEVEL` | Không | `info` | Mức độ chi tiết của log xuất ra thiết bị đầu cuối (`debug`, `info`, `warn`, `error`). |
 
 ## Ranh giới và an toàn

@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { LayoutError, VISUAL_TYPES, assertCaps, buildCard } from '../src/visual/layout.js';
 import { MAX_BYTES, renderVisual } from '../src/visual/render.js';
 import { CANVAS, MOOD_STYLES, PALETTE } from '../src/visual/palette.js';
-import { loadFonts } from '../src/visual/fonts.js';
+import { fontDir, loadFonts } from '../src/visual/fonts.js';
 import { CAPS, type VisualSchema } from '../src/compose/data-gate.js';
 
 function schema(over: Partial<VisualSchema> = {}): VisualSchema {
@@ -33,6 +36,47 @@ describe('fonts', () => {
     expect(fonts.map((f) => f.name)).toContain('Display');
     expect(fonts.map((f) => f.name)).toContain('Label');
     for (const f of fonts) expect(f.data.byteLength).toBeGreaterThan(10_000);
+  });
+
+  it('falls back to the system faces when a named set is not downloaded', () => {
+    // The Fontshare files live outside the repository (their licence forbids
+    // redistribution), so a machine without them must still draw a card.
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-fonts-'));
+    const fallback = loadFonts({ set: 'zodiak-azeret', dir: empty });
+    const system = loadFonts({ set: 'system' });
+    expect(fallback.map((f) => f.data.byteLength)).toEqual(system.map((f) => f.data.byteLength));
+  });
+
+  it('loads a downloaded set with the system faces behind it for missing glyphs', () => {
+    // Stand-in files under the set's paths; the real ones may not be copied
+    // anywhere public, so no test depends on them.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-fonts-'));
+    const georgia = '/System/Library/Fonts/Supplemental/Georgia.ttf';
+    if (!fs.existsSync(georgia)) return;
+    for (const rel of [
+      'zodiak/Zodiak_Complete/Fonts/OTF/Zodiak-Black.otf',
+      'zodiak/Zodiak_Complete/Fonts/OTF/Zodiak-Bold.otf',
+      'azeret-mono/AzeretMono_Complete/Fonts/OTF/AzeretMono-Bold.otf',
+      'azeret-mono/AzeretMono_Complete/Fonts/OTF/AzeretMono-Regular.otf',
+    ]) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.copyFileSync(georgia, path.join(dir, rel));
+    }
+    const names = loadFonts({ set: 'zodiak-azeret', dir }).map((f) => `${f.name}${f.weight}`);
+    expect(names).toEqual([
+      'Display900', 'Display700', 'Label700', 'Label400',
+      'DisplayFallback900', 'DisplayFallback700', 'LabelFallback700', 'LabelFallback400',
+    ]);
+  });
+
+  it('refuses a set name it does not know', () => {
+    expect(() => loadFonts({ set: 'comic-sans' })).toThrow(/Unknown font set "comic-sans"/);
+  });
+
+  it('reads the set and folder from the environment', () => {
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-fonts-'));
+    expect(fontDir({ SQUAREPILOT_FONT_DIR: empty })).toBe(empty);
+    expect(() => loadFonts({}, { SQUAREPILOT_FONT_SET: 'nope', SQUAREPILOT_FONT_DIR: empty })).toThrow(/Unknown font set/);
   });
 });
 
