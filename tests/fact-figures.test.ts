@@ -184,6 +184,32 @@ describe('checkFigures', () => {
   });
 });
 
+describe('checkFigures, differences within one evidence line', () => {
+  // 2026-11-15 trial run: a paid draft passed every other gate and failed only
+  // on "0.1", the gap between two figures of the same evidence line.
+  const ppi = ['PPI came in at 6.5% annually against an expected 6.6%.'];
+
+  it('accepts the gap between two figures of the same line, as points or basis points', () => {
+    expect(checkFigures('A 0.1 point miss on 6.5% versus 6.6%.', ppi).ok).toBe(true);
+    expect(checkFigures('It missed by 10 bps.', ppi).ok).toBe(true);
+  });
+
+  it('accepts a currency gap between two prices of the same line', () => {
+    expect(checkFigures('A $1.4k gap.', ['BTC fell from $70,000 to $68,600.']).ok).toBe(true);
+  });
+
+  it('does not pair figures from different lines', () => {
+    const r = checkFigures('A 0.1 point miss.', ['Annual PPI: 6.5%.', 'Forecasts sat at 6.6%.']);
+    expect(r.unsupported.map((f) => f.raw)).toEqual(['0.1']);
+  });
+
+  it('does not pair figures of different kinds, or accept any other arithmetic', () => {
+    expect(checkFigures('A 1.5 point gap.', ['$70,000 and 68.5% in one line.']).ok).toBe(false);
+    expect(checkFigures('Up 13.1% combined.', ppi).ok).toBe(false);
+    expect(checkFigures('A 0.2 point miss.', ppi).ok).toBe(false);
+  });
+});
+
 describe('figureAppearsIn', () => {
   it.each<{ raw: string; text: string; expected: boolean }>([
     { raw: '$68k', text: 'trading near $68,214 today', expected: true },

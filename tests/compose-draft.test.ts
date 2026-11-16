@@ -143,6 +143,15 @@ describe('buildPrompt', () => {
     expect(buildPrompt(req())).toMatch(/### Cashtags[\s\S]*at most 3/);
   });
 
+  it('tells the model what it may state as fact, after the form and before the length', () => {
+    const p = buildPrompt(req());
+    expect(p).toMatch(/### Facts: what you may state[\s\S]*not in the evidence, so leave it out/);
+    expect(p).toMatch(/one top post says/);
+    expect(p).toMatch(/A difference between two figures in the same evidence line/);
+    expect(p.indexOf('### Facts')).toBeGreaterThan(p.indexOf('### Form'));
+    expect(p.indexOf('### Facts')).toBeLessThan(p.indexOf('### Length'));
+  });
+
   it('tells the model not to write the hashtag itself', () => {
     expect(buildPrompt(req())).toMatch(/Do not include the hashtag/);
   });
@@ -189,6 +198,18 @@ describe('composeDraft', () => {
     expect(out.ok).toBe(true);
     expect(out.tier).toBe('free');
     expect(out.escalated).toBe(false);
+  });
+
+  it('ends the passed draft with the disclaimer, which the gates never see', async () => {
+    const { client, fetchMock } = queueLlmWithMock([GOOD, PASS]);
+    const out = await composeDraft(req(), { llm: client, recent: [] });
+
+    expect(out.ok).toBe(true);
+    expect(out.body.endsWith('\n\n*Not financial advice.*')).toBe(true);
+    expect(out.lengths.nfd).toBe(out.body.normalize('NFD').length);
+    const judged = fetchMock.mock.calls.slice(1).map((c) => String((c as unknown as [string, RequestInit])[1].body));
+    expect(judged.length).toBeGreaterThan(0);
+    expect(judged.some((b) => b.includes('Not financial advice'))).toBe(false);
   });
 
   it('strips a cashtag nothing grounds before the gates see the body', async () => {

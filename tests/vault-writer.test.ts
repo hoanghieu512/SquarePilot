@@ -80,6 +80,21 @@ describe('vault writer', () => {
     expect(recent[0]!.source).toBe('vault');
   });
 
+  it('puts the disclaimer after the rule, where the hand-written posts keep it', () => {
+    const published = `${BODY}\n\n*Not financial advice.*`;
+    const id = seedDraft(db, { status: 'approved', body: published });
+    seedVisual(db, id);
+    db.prepare(
+      `INSERT INTO posts (draft_id, square_post_id, content_snapshot, hashtag, published_at)
+       VALUES (?, '992', ?, '#BTCHolds', '2026-11-15T03:00:00.000Z')`,
+    ).run(id, published);
+
+    const md = readFileSync(writePublishedPost(db, id, { vaultDir: vault, modelFor }).mdPath, 'utf8');
+
+    expect(md).toContain(`${BODY}\n\n---\n*Not financial advice.*\n\n## Nguồn`);
+    expect(parseVaultPost(md, 'x.md').shapeText).toBe(BODY);
+  });
+
   it('never overwrites a post already in the vault', () => {
     writeFileSync(join(squareDir, '2026-11-15-btc-holds-square-post.md'), 'hand-written');
     const id = seedDraft(db, { status: 'approved', body: BODY });

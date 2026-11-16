@@ -7,7 +7,7 @@ import { checkShape } from './shape-scorer.js';
 import { checkPersona } from './persona-guard.js';
 import type { RecentPost } from './recent-posts.js';
 import type { AnchorAssignment, AnchorTier } from './anchor.js';
-import { composePost, type Lengths } from './text-validation.js';
+import { DISCLAIMER_RESERVE, composePost, measure, withDisclaimer, type Lengths } from './text-validation.js';
 import { normalizeCashtags } from './cashtags.js';
 import { factSourcesFrom, runFactGate } from './fact-gate.js';
 import { createLogger } from '../utils/logger.js';
@@ -124,9 +124,12 @@ export async function composeDraft(
       logger.info('Cashtags adjusted', { removed: tagged.removed, added: tagged.added });
     }
 
-    const composed = composePost(tagged.text, req.trend.hashtag);
-    lastBody = composed.body;
-    lastLengths = composed.lengths;
+    // The gates judge the post as written; the disclaimer is appended to what
+    // is published, inside the length budget reserved for it here.
+    const composed = composePost(tagged.text, req.trend.hashtag, undefined, { reserve: DISCLAIMER_RESERVE });
+    const published = withDisclaimer(composed.body);
+    lastBody = published;
+    lastLengths = measure(published);
 
     const tone = await runToneGate(composed.body, {
       llm: opts.llm,
@@ -168,8 +171,8 @@ export async function composeDraft(
       logger.info(`Draft passed on attempt ${attempt} (${tier})`);
       return {
         ok: true,
-        body: composed.body,
-        lengths: composed.lengths,
+        body: published,
+        lengths: measure(published),
         tier,
         attempts,
         escalated: attempt > 1,

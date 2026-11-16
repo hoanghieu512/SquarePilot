@@ -320,6 +320,36 @@ export function isSupported(figure: Figure, sources: Figure[]): boolean {
   return false;
 }
 
+/**
+ * Whether a figure is the gap between two figures of one source line:
+ * "6.5% against an expected 6.6%" supports "a 0.1 point miss" and "10 bps".
+ *
+ * Pairs come from a single line only. Across all sources there are hundreds
+ * of differences, and almost any small invented number would match one.
+ */
+export function isLineDifference(figure: Figure, lines: Figure[][]): boolean {
+  const figVal = Math.abs(figure.value);
+  if (figVal === 0) return false;
+  const p = figure.precision;
+  for (const figs of lines) {
+    for (let i = 0; i < figs.length; i++) {
+      for (let j = i + 1; j < figs.length; j++) {
+        const a = figs[i]!;
+        const b = figs[j]!;
+        if (a.unit !== b.unit) continue;
+        // Same unit, or a bare number, or basis points for a percent gap.
+        const scale =
+          figure.unit === a.unit || figure.unit === 'plain' ? 1 : figure.unit === 'bps' && a.unit === 'percent' ? 100 : 0;
+        if (scale === 0) continue;
+        const gap = Math.abs(Math.abs(a.value) - Math.abs(b.value)) * scale;
+        if (gap === 0) continue;
+        if (Math.abs(Math.round(gap / p) * p - figVal) <= p * 1e-6) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function checkFigures(
   body: string,
   sourceTexts: string[],
@@ -327,12 +357,16 @@ export function checkFigures(
 ): { ok: boolean; unsupported: Figure[]; corrections: string[] } {
   const bodyFigures = extractFigures(body, opts);
   const sources = extractFiguresInternal(sourceTexts.join('\n'), undefined, true);
+  const lines = sourceTexts
+    .flatMap((t) => t.split('\n'))
+    .map((line) => extractFiguresInternal(line, undefined, true))
+    .filter((figs) => figs.length >= 2);
 
   const seenRaw = new Set<string>();
   const unsupported: Figure[] = [];
 
   for (const fig of bodyFigures) {
-    if (isSupported(fig, sources)) continue;
+    if (isSupported(fig, sources) || isLineDifference(fig, lines)) continue;
     if (seenRaw.has(fig.raw)) continue;
     seenRaw.add(fig.raw);
     unsupported.push(fig);

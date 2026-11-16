@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type { VisualSchema } from '../compose/data-gate.js';
-import { HARD_CAP_NFD } from '../compose/text-validation.js';
+import { DISCLAIMER, HARD_CAP_NFD, stripDisclaimer } from '../compose/text-validation.js';
 import { latestOfferedVisual } from '../visual/draft-visual.js';
 import { vietnamDate } from '../compose/recent-posts.js';
 
@@ -245,8 +245,11 @@ export function writePublishedPost(
       : `- Binance Square post id: ${post.square_post_id ?? 'none returned'}`,
   ];
 
-  // The body exactly as published, so the vault copy matches the snapshot.
-  const md = [...front, '', ...header, '', post.content_snapshot, '', '---', '', ...sources, ''].join('\n');
+  // The text exactly as published, laid out like a hand-written post: the
+  // body, a rule, the disclaimer line, then the sources.
+  const body = stripDisclaimer(post.content_snapshot);
+  const tail = body === post.content_snapshot ? [''] : [DISCLAIMER, ''];
+  const md = [...front, '', ...header, '', body, '', '---', ...tail, ...sources, ''].join('\n');
   const mdPath = path.join(squareDir, freeName(squareDir, `${date}-${slug}-square-post`, '.md'));
   fs.writeFileSync(mdPath, md, { flag: 'wx' });
   if (row) {

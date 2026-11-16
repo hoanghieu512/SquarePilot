@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { PERSONA_CAP_WINDOW } from './persona-guard.js';
+import { stripDisclaimer } from './text-validation.js';
 
 /**
  * The recent history of the Square account, as the shape and persona gates see it.
@@ -145,7 +146,8 @@ export function readRecentPosts(
       source: 'db',
       ref: String(r.id),
       date: r.published_at,
-      shapeText: r.content_snapshot,
+      // Measured without the disclaimer, like a vault post's text.
+      shapeText: stripDisclaimer(r.content_snapshot),
       personaText: r.content_snapshot,
       squarePostId: r.square_post_id ?? undefined,
     }));

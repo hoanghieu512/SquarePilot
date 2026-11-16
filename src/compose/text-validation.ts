@@ -81,10 +81,15 @@ function trimToNfd(text: string, budget: number): { text: string; truncated: boo
  * which removes the hashtag first - the one part that cannot be lost, since the
  * API has no hashtag field and the tag in the text is what routes the post.
  */
-export function composePost(body: string, hashtag: string, cap = HARD_CAP_NFD): ComposeResult {
+export function composePost(
+  body: string,
+  hashtag: string,
+  cap = HARD_CAP_NFD,
+  opts: { /** Text appended after composing (the disclaimer); its length is set aside. */ reserve?: string } = {},
+): ComposeResult {
   const tag = hashtag.startsWith('#') ? hashtag : `#${hashtag}`;
   const prefix = `${tag}\n\n`;
-  const prefixCost = prefix.normalize('NFD').length;
+  const prefixCost = prefix.normalize('NFD').length + (opts.reserve ?? '').normalize('NFD').length;
 
   if (prefixCost >= cap) {
     throw new TextValidationError(`Hashtag ${tag} alone exceeds the ${cap} NFD budget`);
@@ -93,6 +98,23 @@ export function composePost(body: string, hashtag: string, cap = HARD_CAP_NFD): 
   const { text, truncated } = trimToNfd(body.trim(), cap - prefixCost);
   const composed = prefix + text;
   return { body: composed, lengths: measure(composed), truncated };
+}
+
+/**
+ * The last line of every published post, as on the hand-written ones. It is
+ * added after the gates: the hand-written posts the shape gate compares with
+ * are measured without theirs, and it is boilerplate, not the author's voice.
+ */
+export const DISCLAIMER = '*Not financial advice.*';
+const DISCLAIMER_TAIL = `\n\n${DISCLAIMER}`;
+export const DISCLAIMER_RESERVE = DISCLAIMER_TAIL;
+
+export function withDisclaimer(body: string): string {
+  return body.endsWith(DISCLAIMER_TAIL) ? body : `${body}${DISCLAIMER_TAIL}`;
+}
+
+export function stripDisclaimer(text: string): string {
+  return text.endsWith(DISCLAIMER_TAIL) ? text.slice(0, -DISCLAIMER_TAIL.length) : text;
 }
 
 export function withinCap(text: string, cap = HARD_CAP_NFD): boolean {

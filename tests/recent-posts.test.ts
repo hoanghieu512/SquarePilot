@@ -176,6 +176,15 @@ describe('readRecentPosts', () => {
     expect(recent.map((p) => p.source)).toEqual(['db', 'vault']);
   });
 
+  it('measures shape on a database post without its disclaimer, like a vault post', () => {
+    publish('#T\n\nBot post.\n\n*Not financial advice.*', '2026-10-02T08:00:00Z');
+
+    const [post] = readRecentPosts(db, dir);
+
+    expect(post!.shapeText).toBe('#T\n\nBot post.');
+    expect(post!.personaText).toContain('Not financial advice');
+  });
+
   it('stops at the window size', () => {
     for (let i = 1; i <= 14; i++) {
       fs.writeFileSync(path.join(dir, `2026-09-${String(i).padStart(2, '0')}-p.md`), `Post ${i}.`);

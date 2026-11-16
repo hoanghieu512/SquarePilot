@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DISCLAIMER,
   HARD_CAP_NFD,
   TextValidationError,
   composePost,
+  stripDisclaimer,
+  withDisclaimer,
   formatCount,
   measure,
   withinCap,
@@ -35,6 +38,23 @@ describe('formatCount', () => {
 
   it('shows one number when the two forms agree', () => {
     expect(formatCount('Plain ASCII line.')).toMatch(/^\[char count: \d+\/2100\]$/);
+  });
+});
+
+describe('disclaimer', () => {
+  it('ends a published post with the disclaimer line, as the hand-written posts do', () => {
+    expect(DISCLAIMER).toBe('*Not financial advice.*');
+    expect(withDisclaimer('#T\n\nBody.')).toBe('#T\n\nBody.\n\n*Not financial advice.*');
+    expect(stripDisclaimer(withDisclaimer('#T\n\nBody.'))).toBe('#T\n\nBody.');
+    expect(stripDisclaimer('#T\n\nBody.')).toBe('#T\n\nBody.');
+  });
+
+  it('reserves room for it, so the published post never breaches the cap', () => {
+    const { body } = composePost('alpha bravo charlie delta echo foxtrot. '.repeat(200), '#T', HARD_CAP_NFD, {
+      reserve: `\n\n${DISCLAIMER}`,
+    });
+    expect(withinCap(withDisclaimer(body))).toBe(true);
+    expect(withDisclaimer(body).normalize('NFD').length).toBeGreaterThan(HARD_CAP_NFD - 60);
   });
 });
 

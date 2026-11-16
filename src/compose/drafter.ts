@@ -82,6 +82,19 @@ export function buildPrompt(req: DraftRequest): string {
 
   parts.push(cashtagInstructions(trend.hashtag));
 
+  // 2026-11-15 trial runs: drafts that passed tone, shape and persona failed
+  // the fact gate on background the model knew but the evidence did not hold
+  // (rate odds, the dollar, a news outlet), on counts of its own "reading",
+  // and on a gap it worked out between two figures.
+  parts.push(
+    '### Facts: what you may state\n\n' +
+      'A separate check compares every figure and every claim in the post with the evidence and the anchor above, and rejects the post if one is not there.\n\n' +
+      '- State as fact only what the evidence says. Background you know about the topic (rate expectations, the dollar, fund flows, what a news outlet reported) is not in the evidence, so leave it out, even when it is true.\n' +
+      '- An evidence line that starts "A top post states" is someone else\'s claim. Keep it theirs: one top post says ..., with its numbers.\n' +
+      '- No counts of your own reading or checking ("I went through 11 posts") unless the evidence or the anchor gives that count.\n' +
+      '- Copy figures as the evidence writes them. A difference between two figures in the same evidence line is fine (6.6% expected, 6.5% printed: a 0.1 point miss). No other arithmetic, no estimates, no figures from memory.',
+  );
+
   parts.push(
     '### Length\n\n' +
       `- Around ${TARGET_NFC} characters. Shorter is better than padded.\n` +
