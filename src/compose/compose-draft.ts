@@ -5,7 +5,7 @@ import { DRAFTER_SYSTEM, buildPrompt, type DraftRequest } from './drafter.js';
 import { runToneGate } from './tone-gate.js';
 import { checkShape } from './shape-scorer.js';
 import { checkPersona } from './persona-guard.js';
-import type { RecentPost } from './recent-posts.js';
+import { shapePeers, type RecentPost } from './recent-posts.js';
 import type { AnchorAssignment, AnchorTier } from './anchor.js';
 import { DISCLAIMER_RESERVE, composePost, measure, withDisclaimer, type Lengths } from './text-validation.js';
 import { normalizeCashtags } from './cashtags.js';
@@ -75,7 +75,7 @@ export async function composeDraft(
 ): Promise<ComposeOutcome> {
   const maxAttempts = opts.maxAttempts ?? 3;
   const recent = opts.recent ?? [];
-  const recentShapes = recent.map((p) => p.shapeText).filter((t) => t.trim().length > 0);
+  const recentShapes = shapePeers(recent, opts.now?.() ?? new Date());
   const recentPersona = recent.map((p) => p.personaText);
 
   const attempts: GateOutcome[] = [];

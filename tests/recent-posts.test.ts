@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../src/database/migrations.js';
 import { detectPersona } from '../src/compose/persona-guard.js';
-import { parseVaultPost, readRecentPosts, readVaultPosts } from '../src/compose/recent-posts.js';
+import { parseVaultPost, readRecentPosts, readVaultPosts, shapePeers, type RecentPost } from '../src/compose/recent-posts.js';
 
 /** Shaped like a hand-written Square post in outputs/square/. */
 const HAND_WRITTEN = `---
@@ -83,6 +83,42 @@ describe('readVaultPosts', () => {
     // An empty window would read as "nobody named the job lately" and switch
     // the cap off without a word.
     expect(() => readVaultPosts(path.join(dir, 'nope'))).toThrow(/outputs\/square/);
+  });
+});
+
+describe('shapePeers', () => {
+  const NOW = new Date('2026-11-16T05:00:00Z');
+  const post = (over: Partial<RecentPost>): RecentPost => ({
+    source: 'vault',
+    ref: 'x.md',
+    date: '2026-11-10',
+    shapeText: 'text',
+    personaText: 'text',
+    kind: 'post',
+    ...over,
+  });
+
+  it('compares a short post only with short posts of the last 14 days', () => {
+    // 2026-11-16: the shape window held four long articles and five campaign
+    // posts from three months earlier, so every short draft read as a repeat.
+    const peers = shapePeers(
+      [
+        post({ shapeText: 'recent post' }),
+        post({ shapeText: 'article', kind: 'article' }),
+        post({ shapeText: 'old post', date: '2026-08-26' }),
+        post({ shapeText: 'bot post', source: 'db', date: '2026-11-15T20:30:00.000Z' }),
+        post({ shapeText: 'edge', date: '2026-11-02' }),
+        post({ shapeText: '   ' }),
+      ],
+      NOW,
+    );
+    expect(peers).toEqual(['recent post', 'bot post', 'edge']);
+  });
+
+  it('reads the kind from the frontmatter or the file name', () => {
+    expect(parseVaultPost('---\npost_type: article\n---\nText', 'a.md').kind).toBe('article');
+    expect(parseVaultPost('Text', '2026-10-31-x-square-article.md').kind).toBe('article');
+    expect(parseVaultPost(HAND_WRITTEN, '2026-08-26-dusk-square-post.md').kind).toBe('post');
   });
 });
 

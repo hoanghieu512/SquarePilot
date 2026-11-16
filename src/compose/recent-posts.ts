@@ -29,6 +29,8 @@ export interface RecentPost {
   squarePostId?: string;
   /** The SquarePilot draft a vault file was written from, when it says so. */
   draftId?: number;
+  /** A short post or a long article: two formats the shape gate never compares. */
+  kind: 'post' | 'article';
 }
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
@@ -83,6 +85,7 @@ export function parseVaultPost(raw: string, fileName: string): RecentPost {
     personaText: personaLines.join('\n').trim(),
     squarePostId: field(front, 'square_post_id'),
     draftId: Number(field(front, 'draft_id')) || undefined,
+    kind: field(front, 'post_type') === 'article' || /-square-article\.md$/.test(fileName) ? 'article' : 'post',
   };
 }
 
@@ -150,6 +153,7 @@ export function readRecentPosts(
       shapeText: stripDisclaimer(r.content_snapshot),
       personaText: r.content_snapshot,
       squarePostId: r.square_post_id ?? undefined,
+      kind: 'post' as const,
     }));
 
   // Sorted by calendar day. Vault files are named by the Vietnam day, so a
@@ -159,4 +163,26 @@ export function readRecentPosts(
   const day = (p: RecentPost): string =>
     p.source === 'db' ? vietnamDate(new Date(p.date)) : p.date.slice(0, 10);
   return [...fromDb, ...vault].sort((a, b) => day(b).localeCompare(day(a))).slice(0, limit);
+}
+
+/** How far back the shape gate looks. */
+export const SHAPE_WINDOW_DAYS = 14;
+
+/**
+ * The posts a new short post's shape is compared with: short posts only, from
+ * the last two weeks.
+ *
+ * The gate exists so consecutive posts do not read alike. On 2026-11-16 the
+ * ten-post window held four long articles and five campaign posts from three
+ * months earlier that all shared one template, so every short draft read as a
+ * repeat of August. The persona cap still counts the whole window, articles
+ * included: it is about what the whole profile page says.
+ */
+export function shapePeers(recent: RecentPost[], now: Date, days = SHAPE_WINDOW_DAYS): string[] {
+  const cutoff = vietnamDate(new Date(now.getTime() - days * 86_400_000));
+  return recent
+    .filter((p) => p.kind !== 'article')
+    .filter((p) => (p.source === 'db' ? vietnamDate(new Date(p.date)) : p.date.slice(0, 10)) >= cutoff)
+    .map((p) => p.shapeText)
+    .filter((t) => t.trim().length > 0);
 }

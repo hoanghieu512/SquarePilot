@@ -138,47 +138,96 @@ export interface ShapeVerdict {
   constraints: string[];
 }
 
+/** One change the drafter can make, and the shape it would leave. */
+interface Move {
+  instruction: string;
+  apply(m: ShapeMetrics): ShapeMetrics;
+}
+
+function nearestTo(m: ShapeMetrics, others: ShapeMetrics[]): number {
+  const ds = others.map((o) => shapeDistance(m, o)).filter((d) => !Number.isNaN(d));
+  return ds.length ? Math.min(...ds) : Infinity;
+}
+
+function movesFor(here: ShapeMetrics): Move[] {
+  const moves: Move[] = [];
+  for (const delta of [3, -3, 5, -5]) {
+    const target = here.paragraphs + delta;
+    if (target < 3) continue;
+    moves.push({
+      instruction: `Use ${target} paragraphs, not ${here.paragraphs}.`,
+      // Same length spread over more or fewer paragraphs.
+      apply: (m) => ({ ...m, paragraphs: target, meanWords: Math.round((m.meanWords * m.paragraphs) / target) }),
+    });
+  }
+  if (here.takePosition !== null) {
+    const late = here.takePosition > 0.5;
+    moves.push({
+      instruction: `Move your judgement ${late ? 'into the opening third' : 'to the final paragraph'}.`,
+      apply: (m) => ({ ...m, takePosition: late ? 0.2 : 1 }),
+    });
+  }
+  moves.push({
+    instruction: here.endsWithQuestion
+      ? 'End on a statement instead of a question.'
+      : 'End on a question instead of a statement.',
+    apply: (m) => ({
+      ...m,
+      endsWithQuestion: !m.endsWithQuestion,
+      questionParagraphs: m.endsWithQuestion ? Math.max(0, m.questionParagraphs - 1) : m.questionParagraphs + 1,
+    }),
+  });
+  return moves;
+}
+
 /**
  * Compare a draft against recent posts.
  *
  * On failure the caller gets concrete numbers to change, not the advice to
  * "be different" - the instruction that produced the repetition in the first
  * place.
+ *
+ * Each change is tried on the measured shape first and kept only if it moves
+ * the draft away from every recent post, not just the nearest one. Steering
+ * by the nearest post alone once sent a draft from a post that ended on a
+ * statement straight into posts that ended on a question, and back, until
+ * every attempt was spent (2026-11-16).
  */
 export function checkShape(draft: string, recentPosts: string[]): ShapeVerdict {
   const here = measureShape(draft);
   if (recentPosts.length === 0) return { ok: true, nearest: Infinity, constraints: [] };
 
   const others = recentPosts.map(measureShape);
-  const distances = others.map((o) => shapeDistance(here, o)).filter((d) => !Number.isNaN(d));
-  if (distances.length === 0) return { ok: true, nearest: Infinity, constraints: [] };
+  const nearest = nearestTo(here, others);
+  if (nearest === Infinity || nearest >= SAME_SHAPE) return { ok: true, nearest, constraints: [] };
 
-  const nearest = Math.min(...distances);
-  if (nearest >= SAME_SHAPE) return { ok: true, nearest, constraints: [] };
-
-  const twin = others[distances.indexOf(nearest)]!;
   const constraints: string[] = [];
-
-  if (Math.abs(here.paragraphs - twin.paragraphs) <= 1) {
-    const target = here.paragraphs > 7 ? here.paragraphs - 3 : here.paragraphs + 3;
-    constraints.push(`Use ${target} paragraphs, not ${here.paragraphs}.`);
-  }
   if (here.cv < 0.4) {
     constraints.push(
       'Paragraph lengths are too even. Make at least one paragraph a single short line and ' +
         'one noticeably longer than the rest.',
     );
   }
-  if (here.takePosition !== null && twin.takePosition !== null) {
-    const move = here.takePosition > 0.5 ? 'into the opening third' : 'to the final paragraph';
-    constraints.push(`Move your judgement ${move}.`);
+
+  // Greedy: take the change that leaves the draft farthest from everything
+  // recent, then the next on top of it, until it is clear or nothing helps.
+  let shape = here;
+  let distance = nearest;
+  let remaining = movesFor(here);
+  while (distance < SAME_SHAPE && remaining.length > 0) {
+    const scored = remaining.map((move) => ({ move, d: nearestTo(move.apply(shape), others) }));
+    const best = scored.reduce((a, b) => (b.d > a.d ? b : a));
+    if (best.d <= distance) break;
+    constraints.push(best.move.instruction);
+    shape = best.move.apply(shape);
+    distance = best.d;
+    // One paragraph count, one ending, one take position.
+    const kind = best.move.instruction.split(' ')[0];
+    remaining = remaining.filter((m) => m.instruction.split(' ')[0] !== kind);
   }
-  if (here.endsWithQuestion === twin.endsWithQuestion) {
-    constraints.push(
-      here.endsWithQuestion
-        ? 'End on a statement instead of a question.'
-        : 'End on a question instead of a statement.',
-    );
+
+  if (constraints.length === 0) {
+    constraints.push(`Use ${here.paragraphs > 7 ? here.paragraphs - 3 : here.paragraphs + 3} paragraphs, not ${here.paragraphs}.`);
   }
 
   return {

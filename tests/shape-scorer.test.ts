@@ -105,6 +105,30 @@ describe('checkShape', () => {
     expect(constraints.join(' ')).not.toMatch(/be different|vary it|mix it up/i);
   });
 
+  it('never steers a draft from one recent post into another', () => {
+    // 2026-11-16 publish run: told "end on a question" to get away from a
+    // post ending on a statement, the draft landed among posts ending on a
+    // question and was told the opposite; three attempts, no post.
+    const para = (n: number) => 'alpha bravo charlie delta echo foxtrot golf hotel '.repeat(n).trim() + '.';
+    const statementPost = [para(2), para(3), para(2), para(3), 'That is where it stands.'].join('\n\n');
+    const questionPost = [para(2), para(3), para(2), para(3), 'Where does it stand?'].join('\n\n');
+    const draft = [para(2), para(3), para(2), para(3), 'It stands there.'].join('\n\n');
+
+    const verdict = checkShape(draft, [statementPost, questionPost]);
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.constraints.join(' ')).not.toMatch(/End on a question/);
+    expect(verdict.constraints.join(' ')).toMatch(/paragraphs/);
+  });
+
+  it('still asks for the other ending when that leads away from every recent post', () => {
+    const para = (n: number) => 'alpha bravo charlie delta echo foxtrot golf hotel '.repeat(n).trim() + '.';
+    const statementPost = [para(2), para(3), para(2), para(3), 'That is where it stands.'].join('\n\n');
+    const draft = [para(2), para(3), para(2), para(3), 'It stands there.'].join('\n\n');
+
+    expect(checkShape(draft, [statementPost]).constraints.join(' ')).toMatch(/End on a question/);
+  });
+
   it('passes a draft shaped unlike anything recent', () => {
     const post = ['Alpha bravo charlie.', 'Delta echo foxtrot.', 'My take: golf hotel.'].join('\n\n');
     const different = ['My take: right away.', 'word '.repeat(80), 'Short.', 'Is that the point?'].join('\n\n');

@@ -81,7 +81,7 @@ function queueLlmWithMock(replies: string[]): {
 const PASS = '{"pass":true,"violations":[]}';
 
 function recentPost(text: string): RecentPost {
-  return { source: 'db', ref: '1', date: '2026-10-01', shapeText: text, personaText: text };
+  return { source: 'db', ref: '1', date: '2026-10-01', shapeText: text, personaText: text, kind: 'post' };
 }
 
 const DERIVED: AnchorAssignment = {
