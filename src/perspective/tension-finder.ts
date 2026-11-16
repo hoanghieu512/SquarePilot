@@ -1,5 +1,6 @@
 import type { Trend } from '../collect/parse-trends.js';
 import type { HashtagPost } from '../collect/hashtag-reader.js';
+import { groupDigits } from '../utils/numbers.js';
 
 export interface Tension {
   /** A statement that can be checked, never a rhetorical question. */
@@ -83,8 +84,8 @@ export function findFramingTensions(trends: Trend[]): Tension[] {
           `${trends[i]!.hashtag} and ${trends[j]!.hashtag} are trending at the same time about ` +
           `the same subject (${shared.join(', ')}), told through two different frames.`,
         evidence: [
-          `${trends[i]!.hashtag}: ${trends[i]!.viewCount} views, ${trends[i]!.contentCount} posts`,
-          `${trends[j]!.hashtag}: ${trends[j]!.viewCount} views, ${trends[j]!.contentCount} posts`,
+          `${trends[i]!.hashtag}: ${groupDigits(trends[i]!.viewCount)} views, ${groupDigits(trends[i]!.contentCount)} posts`,
+          `${trends[j]!.hashtag}: ${groupDigits(trends[j]!.viewCount)} views, ${groupDigits(trends[j]!.contentCount)} posts`,
         ],
       });
     }
@@ -109,17 +110,17 @@ export function findScaleTensions(trends: Trend[]): Tension[] {
       tensions.push({
         kind: 'scale',
         claim:
-          `${t.hashtag} drew ${t.viewCount} views across only ${t.contentCount} posts ` +
-          `(${Math.round(viewsPerPost)} views per post), so far more people are reading it than writing about it.`,
-        evidence: [`viewCount=${t.viewCount}`, `contentCount=${t.contentCount}`],
+          `${t.hashtag} drew ${groupDigits(t.viewCount)} views across only ${groupDigits(t.contentCount)} posts ` +
+          `(${groupDigits(viewsPerPost)} views per post), so far more people are reading it than writing about it.`,
+        evidence: [`${groupDigits(t.viewCount)} views`, `${groupDigits(t.contentCount)} posts`],
       });
     } else if (viewsPerPost < 20) {
       tensions.push({
         kind: 'scale',
         claim:
-          `${t.hashtag} has ${t.contentCount} posts but only ${t.viewCount} views ` +
+          `${t.hashtag} has ${groupDigits(t.contentCount)} posts but only ${groupDigits(t.viewCount)} views ` +
           `(${viewsPerPost.toFixed(1)} per post), so the writing is outrunning the readership.`,
-        evidence: [`viewCount=${t.viewCount}`, `contentCount=${t.contentCount}`],
+        evidence: [`${groupDigits(t.viewCount)} views`, `${groupDigits(t.contentCount)} posts`],
       });
     }
   }

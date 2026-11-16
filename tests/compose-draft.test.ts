@@ -212,6 +212,19 @@ describe('composeDraft', () => {
     expect(judged.some((b) => b.includes('Not financial advice'))).toBe(false);
   });
 
+  it('groups long numbers and keeps a single disclaimer, before any gate runs', async () => {
+    // 2026-11-16: the first draft to pass read "137290 views" style counts
+    // and ended with its own "Not investment advice." above the appended one.
+    const draft = `${GOOD.replace('Nobody noticed.', 'Nobody noticed 137290 views.')}\n\nNot investment advice.`;
+    const { client } = queueLlm([draft, PASS]);
+    const out = await composeDraft(req(), { llm: client, recent: [] });
+
+    expect(out.ok).toBe(true);
+    expect(out.body).toContain('Nobody noticed 137,290 views.');
+    expect(out.body).not.toContain('Not investment advice');
+    expect(out.body.match(/advice/g)).toHaveLength(1);
+  });
+
   it('strips a cashtag nothing grounds before the gates see the body', async () => {
     const { client } = queueLlm([GOOD.replace('Nobody noticed.', 'Nobody noticed $ENA.'), PASS]);
     const out = await composeDraft(req(), { llm: client, recent: [] });

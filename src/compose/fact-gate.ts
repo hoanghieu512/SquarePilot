@@ -3,6 +3,7 @@ import { JUDGE_BUDGET } from '../llm/budgets.js';
 import type { DraftRequest } from './drafter.js';
 import { checkFigures } from './fact-figures.js';
 import { hashtagToHeadline } from './data-gate.js';
+import { groupDigits } from '../utils/numbers.js';
 
 /**
  * Does the draft state anything its sources do not?
@@ -36,7 +37,7 @@ export interface FactSources {
 export function factSourcesFrom(req: DraftRequest): FactSources {
   return {
     hashtag: req.trend.hashtag,
-    trendLine: `${req.trend.viewCount} views across ${req.trend.contentCount} posts.`,
+    trendLine: `${groupDigits(req.trend.viewCount)} views across ${groupDigits(req.trend.contentCount)} posts.`,
     summary: req.perspective.summary,
     evidence: req.perspective.evidence,
     guardrails: req.perspective.guardrails,

@@ -5,8 +5,9 @@ import type { ModeSpec } from './modes.js';
 import { constraintsAsInstructions } from './modes.js';
 import type { VoiceAssets } from './prompt-assets.js';
 import { anchorInstructions, type AnchorAssignment } from './anchor.js';
-import { TARGET_NFC } from './text-validation.js';
+import { DISCLAIMER, TARGET_NFC } from './text-validation.js';
 import { cashtagInstructions } from './cashtags.js';
+import { groupDigits } from '../utils/numbers.js';
 
 export interface DraftRequest {
   trend: Trend;
@@ -51,7 +52,7 @@ export function buildPrompt(req: DraftRequest): string {
   parts.push(
     '## Layer 2 - Today\n\n' +
       `Trending hashtag: ${trend.hashtag}\n` +
-      `Attention: ${trend.viewCount} views across ${trend.contentCount} posts.\n\n` +
+      `Attention: ${groupDigits(trend.viewCount)} views across ${groupDigits(trend.contentCount)} posts.\n\n` +
       `### The point of view you are writing from (${perspective.kind})\n\n` +
       `${perspective.summary}\n\n` +
       '### Evidence. Use it. Do not add facts beyond it.\n\n' +
@@ -92,13 +93,15 @@ export function buildPrompt(req: DraftRequest): string {
       '- State as fact only what the evidence says. Background you know about the topic (rate expectations, the dollar, fund flows, what a news outlet reported) is not in the evidence, so leave it out, even when it is true.\n' +
       '- An evidence line that starts "A top post states" is someone else\'s claim. Keep it theirs: one top post says ..., with its numbers.\n' +
       '- No counts of your own reading or checking ("I went through 11 posts") unless the evidence or the anchor gives that count.\n' +
-      '- Copy figures as the evidence writes them. A difference between two figures in the same evidence line is fine (6.6% expected, 6.5% printed: a 0.1 point miss). No other arithmetic, no estimates, no figures from memory.',
+      '- Copy figures as the evidence writes them. A difference between two figures in the same evidence line is fine (6.6% expected, 6.5% printed: a 0.1 point miss). No other arithmetic, no estimates, no figures from memory.\n' +
+      '- Write numbers of four or more digits with thousands separators, as the evidence does: 283,050 views, 2,344 posts.',
   );
 
   parts.push(
     '### Length\n\n' +
       `- Around ${TARGET_NFC} characters. Shorter is better than padded.\n` +
-      `- Do not include the hashtag; it is prepended afterwards and its length is already reserved.`,
+      `- Do not include the hashtag; it is prepended afterwards and its length is already reserved.\n` +
+      `- Do not write a disclaimer; "${DISCLAIMER}" is appended afterwards, also within the reserved length.`,
   );
 
   if (req.corrections?.length) {

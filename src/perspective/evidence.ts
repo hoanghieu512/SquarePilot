@@ -1,6 +1,7 @@
 import type { Trend } from '../collect/parse-trends.js';
 import type { HashtagPost } from '../collect/hashtag-reader.js';
 import type { Lens } from './lens-store.js';
+import { groupDigits } from '../utils/numbers.js';
 
 /**
  * Where a lens can get its evidence from.
@@ -53,7 +54,7 @@ export function gatherDataEvidence(trend: Trend, posts: HashtagPost[]): string[]
   const evidence: string[] = [];
 
   evidence.push(
-    `${trend.hashtag} carries ${trend.viewCount} views across ${trend.contentCount} posts ` +
+    `${trend.hashtag} carries ${groupDigits(trend.viewCount)} views across ${groupDigits(trend.contentCount)} posts ` +
       `(${(trend.viewCount / Math.max(trend.contentCount, 1)).toFixed(1)} views per post).`,
   );
 

@@ -3,6 +3,7 @@ import type { HashtagPost } from '../collect/hashtag-reader.js';
 import type { AnchorBank, BankAnchor } from '../perspective/anchor-bank.js';
 import type { Perspective } from '../perspective/types.js';
 import { detectPersona } from './persona-guard.js';
+import { groupDigits } from '../utils/numbers.js';
 
 /**
  * Which first-person anchor a post uses, decided before the draft is written.
@@ -111,8 +112,8 @@ export function pipelineFactsFor(trend: Trend, topPosts: HashtagPost[]): string[
     facts.push(`Read the ${topPosts.length} most-read posts under ${trend.hashtag} on Binance Square.`);
   }
   facts.push(
-    `Looked up ${trend.hashtag} on Square's trending page: ${trend.viewCount} views across ` +
-      `${trend.contentCount} posts.`,
+    `Looked up ${trend.hashtag} on Square's trending page: ${groupDigits(trend.viewCount)} views across ` +
+      `${groupDigits(trend.contentCount)} posts.`,
   );
   return facts;
 }

@@ -65,8 +65,8 @@ describe('verifyQuote', () => {
 describe('gatherDataEvidence', () => {
   it('states the trend numbers in a form that can be recomputed', () => {
     const [first] = gatherDataEvidence(trend(), []);
-    expect(first).toContain('137290 views');
-    expect(first).toContain('1856 posts');
+    expect(first).toContain('137,290 views');
+    expect(first).toContain('1,856 posts');
   });
 
   it('quotes sentences that carry a figure', () => {

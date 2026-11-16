@@ -147,7 +147,7 @@ describe('pipelineFactsFor', () => {
     const facts = pipelineFactsFor(trend, [post, post, post]);
 
     expect(facts.join(' ')).toMatch(/Read the 3 most-read posts under #FedHoldsRates/);
-    expect(facts.join(' ')).toMatch(/52000 views across 640 posts/);
+    expect(facts.join(' ')).toMatch(/52,000 views across 640 posts/);
   });
 
   it('does not claim the posts were read when none came back', () => {

@@ -11,6 +11,7 @@ import { DISCLAIMER_RESERVE, composePost, measure, withDisclaimer, type Lengths 
 import { normalizeCashtags } from './cashtags.js';
 import { factSourcesFrom, runFactGate } from './fact-gate.js';
 import { createLogger } from '../utils/logger.js';
+import { dropModelDisclaimer, groupLongNumbers } from './post-format.js';
 
 const logger = createLogger('compose');
 
@@ -124,9 +125,12 @@ export async function composeDraft(
       logger.info('Cashtags adjusted', { removed: tagged.removed, added: tagged.added });
     }
 
+    // Fixes code can make with certainty, before any gate sees the text: digit
+    // grouping, and no second disclaimer next to the appended one.
+    const formatted = groupLongNumbers(dropModelDisclaimer(tagged.text));
     // The gates judge the post as written; the disclaimer is appended to what
     // is published, inside the length budget reserved for it here.
-    const composed = composePost(tagged.text, req.trend.hashtag, undefined, { reserve: DISCLAIMER_RESERVE });
+    const composed = composePost(formatted, req.trend.hashtag, undefined, { reserve: DISCLAIMER_RESERVE });
     const published = withDisclaimer(composed.body);
     lastBody = published;
     lastLengths = measure(published);
