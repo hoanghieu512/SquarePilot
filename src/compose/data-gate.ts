@@ -26,6 +26,8 @@ export interface VisualSchema {
    * describe text fields only.
    */
   icon?: string;
+  /** Absolute path of the paper texture drawn under the card, when the vault has one. */
+  texture?: string;
 }
 
 /** §7: missing two or more of these means stop, do not invent numbers. */

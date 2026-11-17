@@ -28,29 +28,32 @@ export class RenderError extends Error {
 }
 
 /**
+ * An image asset (lens icon, paper texture) as a data URL, or nothing. A
+ * missing file draws the card without it rather than failing: there is no
+ * post without a card, and both are decoration.
+ */
+export function loadIcon(file: string | undefined): string | undefined {
+  if (!file) return undefined;
+  if (!fs.existsSync(file)) {
+    logger.warn(`Image not found, drawing the card without it: ${file}`);
+    return undefined;
+  }
+  const mime = /\.jpe?g$/i.test(file) ? 'image/jpeg' : 'image/png';
+  return `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`;
+}
+
+/**
  * Schema to PNG, with no model in the loop.
  *
  * An image model cannot be trusted with the text: every number on the card has
  * to match the post exactly, and the Vietnamese diacritics on the sibling
  * pipeline would come out mangled. The model's only job upstream is to fill the
- * schema; the drawing is deterministic.
+ * schema; the drawing is deterministic. Generated art enters only as assets
+ * made once and kept in the vault: lens icons and the paper texture.
  */
-/**
- * The lens icon as a data URL, or nothing. A missing file draws the card
- * without it rather than failing: there is no post without a card, and the
- * icon is decoration.
- */
-export function loadIcon(file: string | undefined): string | undefined {
-  if (!file) return undefined;
-  if (!fs.existsSync(file)) {
-    logger.warn(`Icon not found, drawing the card without it: ${file}`);
-    return undefined;
-  }
-  return `data:image/png;base64,${fs.readFileSync(file).toString('base64')}`;
-}
-
 export async function renderVisual(schema: VisualSchema): Promise<RenderResult> {
-  const svg = await satori(buildCard(schema, { icon: loadIcon(schema.icon) }) as never, {
+  const assets = { icon: loadIcon(schema.icon), texture: loadIcon(schema.texture) };
+  const svg = await satori(buildCard(schema, assets) as never, {
     width: CANVAS.width,
     height: CANVAS.height,
     fonts: loadFonts(),

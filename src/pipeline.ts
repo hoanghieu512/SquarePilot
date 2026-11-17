@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type { Config } from './config/index.js';
@@ -71,6 +72,18 @@ export interface PipelineResult {
   visual?: RenderResult & { path: string };
   /** Present once a draft has been attempted, for a rewrite. */
   context?: DraftContext;
+}
+
+/**
+ * The paper texture under every card, kept in the vault with the other
+ * visual assets: `outputs/visuals/assets/paper-texture.{png,jpg}`. None
+ * there draws the flat paper colour, as before.
+ */
+export function paperTexture(vaultDir: string): string | undefined {
+  const dir = path.join(vaultDir, 'outputs', 'visuals', 'assets');
+  return ['paper-texture.png', 'paper-texture.jpg']
+    .map((f) => path.join(dir, f))
+    .find((f) => fs.existsSync(f));
 }
 
 /**
@@ -245,6 +258,7 @@ export async function runUpToDraft(
   );
 
   const lensIcon = perspective.kind === 'lens' ? lenses.find((l) => l.id === perspective.ref)?.icon : undefined;
+  const texture = paperTexture(config.vaultDir);
 
   // The data gate passed for `chosen`, or it would not have been chosen.
   const context: DraftContext = {
@@ -261,6 +275,7 @@ export async function runUpToDraft(
       ...(chosen.dataGate?.ok ? chosen.dataGate.available : {}),
       // A post from a lens carries that lens's icon; angles and tensions have none.
       ...(lensIcon ? { icon: lensIcon } : {}),
+      ...(texture ? { texture } : {}),
     },
   };
 

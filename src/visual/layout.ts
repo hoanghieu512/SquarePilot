@@ -67,7 +67,12 @@ type Node = { type: string; props: Record<string, unknown> };
 export interface CardAssets {
   /** The lens icon as a data URL. */
   icon?: string;
+  /** The paper texture as a data URL. */
+  texture?: string;
 }
+
+/** How strongly the texture shows over the flat paper colour. */
+export const TEXTURE_OPACITY = 0.55;
 
 /** Icon edge in pixels. */
 export const ICON_SIZE = 220;
@@ -286,6 +291,23 @@ export function buildCard(schema: VisualSchema, assets: CardAssets = {}): Node {
     ],
   });
 
+  // Aged paper under everything, faint enough that the flat paper colour
+  // still decides how the card reads. Drawn first and taken out of the flow.
+  const texture = el('img', {
+    src: assets.texture,
+    width: CANVAS.width,
+    height: CANVAS.height,
+    style: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: CANVAS.width,
+      height: CANVAS.height,
+      objectFit: 'cover',
+      opacity: TEXTURE_OPACITY,
+    },
+  });
+
   return el('div', {
     style: {
       width: CANVAS.width,
@@ -295,8 +317,10 @@ export function buildCard(schema: VisualSchema, assets: CardAssets = {}): Node {
       backgroundColor: PALETTE.paper,
       padding: PADDING,
       gap: 32,
+      position: 'relative',
     },
     children: [
+      ...(assets.texture ? [texture] : []),
       capsule,
       headline,
       // The panel absorbs whatever height is left. A fixed-height panel left a

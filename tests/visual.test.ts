@@ -195,6 +195,16 @@ describe('the focal panel', () => {
     expect(nodes(buildCard(schema())).some((n) => n.type === 'img')).toBe(false);
   });
 
+  it('lays the paper texture under everything, out of the flow, only when there is one', () => {
+    const TEX = 'data:image/jpeg;base64,BBBB';
+    const card = buildCard(schema(), { texture: TEX }) as unknown as { props: { children: N[] } };
+    const first = card.props.children[0] as unknown as { type: string; props: { src: string; style: Record<string, unknown> } };
+    expect(first.type).toBe('img');
+    expect(first.props.src).toBe(TEX);
+    expect(first.props.style.position).toBe('absolute');
+    expect(nodes(buildCard(schema())).some((n) => n.type === 'img')).toBe(false);
+  });
+
   it('puts the line that says what the number is under it', () => {
     const texts = nodes(buildCard(schema({ focal_subline: 'views across 2,344 posts' }))).map((n) => n.props.children);
     expect(texts).toContain('views across 2,344 posts');
@@ -217,6 +227,9 @@ describe('the focal panel', () => {
     fs.writeFileSync(file, Buffer.from(png, 'base64'));
     expect(loadIcon(file)).toBe(`data:image/png;base64,${png}`);
     expect(loadIcon('/nope/missing.png')).toBeUndefined();
+    const jpg = file.replace(/\.png$/, '.jpg');
+    fs.copyFileSync(file, jpg);
+    expect(loadIcon(jpg)!.startsWith('data:image/jpeg;base64,')).toBe(true);
     const withIcon = await renderVisual(schema({ focal_subline: 'views across 2,344 posts', icon: file }));
     expect(withIcon.bytes).toBeLessThan(MAX_BYTES);
   });
