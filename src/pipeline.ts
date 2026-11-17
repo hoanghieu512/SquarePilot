@@ -72,6 +72,10 @@ export interface PipelineResult {
   visual?: RenderResult & { path: string };
   /** Present once a draft has been attempted, for a rewrite. */
   context?: DraftContext;
+  /** What the trends page gave this run, for the report when nothing is posted. */
+  trends?: { all: number; eligible: number; rejected: { hashtag: string; reason: string }[] };
+  /** Why a draft that passed its gates has no card, when it has none. */
+  visualSkipped?: string;
 }
 
 /**
@@ -172,6 +176,7 @@ export async function runUpToDraft(
   logger.info(`Vault: ${angles.length} angles, ${lenses.length} lenses`);
 
   const collected = await collectTrends(db, { headed: options.headed });
+  const trends = { all: collected.all.length, eligible: collected.eligible.length, rejected: collected.rejected };
   const recent = recentModes(db);
 
   const candidates: Candidate[] = [];
@@ -223,7 +228,7 @@ export async function runUpToDraft(
 
   if (!chosen) {
     logger.info('Nothing to write today - no trend produced both a perspective and a visual');
-    return { candidates, chosen: null };
+    return { candidates, chosen: null, trends };
   }
 
   logger.info(
@@ -231,7 +236,7 @@ export async function runUpToDraft(
   );
 
   const selection = chosen.selection;
-  if (!options.llm || selection.outcome === 'stop') return { candidates, chosen };
+  if (!options.llm || selection.outcome === 'stop') return { candidates, chosen, trends };
 
   // Voice files are read per run, so an edit in Content-Creator takes effect on
   // the next pass with no deploy.
@@ -289,6 +294,8 @@ export async function runUpToDraft(
     draft: drawn.draft,
     draftId: drawn.draftId,
     visual: drawn.visual,
+    visualSkipped: drawn.visualSkipped,
     context,
+    trends,
   };
 }

@@ -13,7 +13,7 @@ SquarePilot là công cụ CLI local-first dành cho người vận hành nội 
 - **Bước tiếp theo (chưa triển khai)**:
   - Áp dụng bản cập nhật quy tắc cho các file giọng văn bên ngoài, duyệt kho `anchor-bank.md` sang trạng thái `approved`, và chạy thử nghiệm đầu-cuối thang chọn neo mới với LLM thật.
   - **Phase 6 (Publish và Duyệt)**: Đã có `square-client` (upload ảnh và đăng bài qua OpenAPI của Binance Square), `zalo-approver` (gửi bản nháp kèm ảnh qua bot Zalo, nhận lệnh chữ kèm mã draft: `d K7` đăng, `v K7` viết lại, `a K7` đổi con số chính trên thẻ, `b K7 <số>` bỏ kèm lý do; tự hết hạn sau 6 giờ; ban đầu thiết kế cho Telegram, đổi sang Zalo ngày 2026-11-14 vì Zalo không có nút bấm nên duyệt bằng lệnh chữ), và từ ngày 2026-11-15 đã nối vào pipeline qua `npm start`: lượt chạy soạn bài, gửi lên Zalo rồi ở lại chờ lệnh tới khi draft được xử lý hoặc hết hạn. Đăng thật mặc định tắt, chỉ bật bằng cờ `--publish`. `vault-writer` (từ 2026-11-15) chép bài đã đăng vào `outputs/square/` theo đúng khuôn bài viết tay và thẻ vào `outputs/visuals/square/`, chỉ khi đăng thật mới đánh dấu angle `status: posted` và anchor bank `used`/`last_used`; draft đã gửi duyệt mà không đăng được giữ ở `outputs/square-auto/drafts/` kèm lý do.
-  - **Phase 7 (Vận hành và Hiệu chỉnh)**: Thiết lập lịch chạy tự động bằng `launchd` trên macOS, xây dựng script thống kê tỉ lệ duyệt `npm run stats`, và hiệu chỉnh lại các ngưỡng lọc sau 20 bài đăng.
+  - **Phase 7 (Vận hành và Hiệu chỉnh)**: Từ 2026-11-17 có lịch `launchd` chạy 07:00, 13:00, 20:00 (giờ máy, đặt Asia/Ho_Chi_Minh) qua `npm run schedule -- install`; lượt không ra bài gửi báo cáo lên Zalo nói rõ từng trend dừng ở bậc nào, lượt lỗi cũng báo; `npm run stats` in tỉ lệ duyệt theo model, theo nguồn góc nhìn và theo lens. Còn lại: hiệu chỉnh ngưỡng shape gate, ngưỡng lượt xem trend và ngưỡng khớp angle sau khoảng 20 bài.
 
 ## Tech Stack
 
@@ -78,6 +78,8 @@ SquarePilot/
 - `npm start` (`tsx src/scripts/run.ts`): Một lượt chạy đầy đủ. Thu trend, chọn góc nhìn, soạn bài qua các cổng, vẽ thẻ, upload thẻ lên kho ảnh của Square, gửi draft lên Zalo, rồi ở lại đọc lệnh cho tới khi draft được đăng, bị bỏ hoặc hết hạn sau 6 giờ. `v` viết lại từ đúng ngữ cảnh đang có trong bộ nhớ (tối đa 2 lần mỗi lượt), `a` vẽ lại thẻ với con số khác trong bài. Mỗi lúc chỉ một lượt được chờ duyệt (khóa `session.lock` cạnh file database); lượt thứ hai tự nhường. Lệnh trong chat chỉ tác động lên draft do chính lượt đó gửi; sau khi viết lại, lệnh phải kèm mã. Lượt bị dừng giữa chừng (Ctrl-C, quá hạn) rút các draft còn chờ của nó, và `dry-run` cũng rút draft của nó, nên không có draft nào nằm chờ mà không ai đọc. Bài được đăng luôn dùng thẻ mới nhất đã thật sự hiện trong chat. Cờ:
   - `--publish`: Bật đăng thật. Không có cờ này thì `d` trả lời "publishing is off" và draft vẫn chờ duyệt, nên chạy thử được trên trend thật mà không có gì lên Binance Square.
   - `--headed`: Mở cửa sổ trình duyệt khi thu trend, như ở `dry-run`.
+- `npm run schedule -- install|uninstall|status` (`tsx src/scripts/schedule.ts`): Cài, gỡ hoặc xem lịch launchd 07:00, 13:00, 20:00 (xem mục Cơ chế lập lịch).
+- `npm run stats [-- --since YYYY-MM-DD]` (`tsx src/scripts/stats.ts`): In bảng tỉ lệ duyệt từ database cục bộ, không gọi API: theo model, theo nguồn góc nhìn, theo lens, lý do bị bỏ, và chi phí mỗi bài đã đăng.
 - `npm run check:approval` (`tsx src/scripts/approval-check.ts`): Thử khung chat duyệt mà không gọi model: chép một draft đã ghi (mặc định draft mới nhất, hoặc `-- --draft <id>`) sang database tạm, vẽ thẻ, upload, rồi chạy phiên duyệt với đăng bài tắt.
 - `npm run dry-run` (`tsx src/scripts/dry-run.ts`): Chạy thử nghiệm pipeline mà không xuất bản bất kỳ nội dung nào. Nếu không truyền cờ nào, lệnh sẽ nạp cấu hình, khởi tạo cơ sở dữ liệu SQLite (tự động chạy migration) và in ra số lượng bản ghi hiện có trong 9 bảng. Kịch bản hỗ trợ các cờ dòng lệnh sau:
   - `--live-llm`: Gửi một yêu cầu kiểm tra kết nối (`smoke-test`) tới model miễn phí trên OpenRouter và ghi nhận vào bảng `llm_calls`.
@@ -91,11 +93,10 @@ SquarePilot/
 - `npm run test:watch` (`vitest`): Chạy Vitest ở chế độ theo dõi và tự động chạy lại khi mã nguồn thay đổi.
 - `npm run build` (`tsc`): Biên dịch mã nguồn TypeScript từ thư mục `src/` sang JavaScript tại thư mục `dist/`.
 
-*Lưu ý khác biệt giữa tài liệu và code*: Kế hoạch triển khai Phase 7 có đề cập tới lệnh `npm run stats` để in bảng thống kê tỉ lệ duyệt bài, nhưng script này hiện chưa được khai báo trong `package.json` và chưa được cài đặt trong mã nguồn.
 
 ### Cơ chế lập lịch (Scheduling)
 
-- **Trong mã nguồn hiện tại**: Chưa có file cấu hình lập lịch hay script khởi chạy nền cho scheduler; mọi lần chạy hiện được kích hoạt thủ công qua dòng lệnh với `npm start` hoặc `npm run dry-run`.
+- **Trong mã nguồn hiện tại**: `npm run schedule -- install` ghi `~/Library/LaunchAgents/com.squarepilot.run.plist` từ đường dẫn thật của bản checkout và nạp vào launchd; mỗi lượt là `npm start -- --publish` (mỗi bài vẫn cần lệnh `d` trong chat duyệt), log mỗi ngày một file ở `~/.squarepilot/logs/run-YYYY-MM-DD.log`. Thêm `--no-publish` để chạy thử theo lịch mà không đăng. `npm run schedule -- status` xem trạng thái, `npm run schedule -- uninstall` gỡ. Lượt gặp lượt trước còn chờ duyệt thì tự nhường (khóa phiên); lượt lỡ lúc máy ngủ chạy một lần khi máy thức.
 - **Theo thiết kế trong PRD và Implementation Plan (Phase 7)**: Hệ thống sẽ chạy tự động trên máy Mac thông qua `launchd` 3 lần mỗi ngày vào lúc `07:00`, `13:00` và `20:00` (giờ Việt Nam, `Asia/Ho_Chi_Minh`), với hạn mức tự đặt tối đa 1 bài/ngày và sàn 0 bài. Dự án không dùng GitHub Actions để chạy pipeline thu thập dữ liệu vì Cloudflare chặn các yêu cầu từ địa chỉ IP của trung tâm dữ liệu.
 
 ## Cấu hình

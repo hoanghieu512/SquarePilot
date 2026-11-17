@@ -1,4 +1,5 @@
 import type { Trend } from '../collect/parse-trends.js';
+import { hashtagToHeadline } from '../compose/data-gate.js';
 import type { HashtagPost } from '../collect/hashtag-reader.js';
 import { groupDigits } from '../utils/numbers.js';
 
@@ -45,16 +46,21 @@ const STOPWORDS = new Set([
 ]);
 
 export function significantWords(hashtag: string): string[] {
-  return hashtag
-    .replace(/^#/, '')
-    // Split an acronym from the word after it: USJobless -> US Jobless. Without
-    // this the whole prefix stays glued and no angle can ever match the trend.
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/([A-Za-z])(\d)/g, '$1 $2')
+  // The same splitter the card headline uses: it knows brands ("ETFs"),
+  // glued function words ("Cryptoand"), amounts ("$1.065B", "Q3") and tickers
+  // after an amount ("2.09M MSTR"). Its own split glued "for$244.7m",
+  // "186websites" and "returnas" and dropped "ETFs" entirely (2026-11-17).
+  return hashtagToHeadline(hashtag)
     .toLowerCase()
-    .split(/[^a-z0-9.%$]+/)
-    .filter((w) => w.length > 2 && !STOPWORDS.has(w));
+    .split(/\s+/)
+    .map((w) =>
+      w
+        .replace(/[’']s$/, '')
+        .replace(/^[“"'(]+/, '')
+        .replace(/[?!.,:;"“”’')]+$/, ''),
+    )
+    // Short words carry nothing, except period codes such as "q3" and "h1".
+    .filter((w) => (w.length > 2 || /^[a-z]\d$/.test(w)) && !STOPWORDS.has(w));
 }
 
 /**

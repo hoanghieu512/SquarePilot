@@ -93,6 +93,12 @@ describe('hashtagToHeadline glued function words', () => {
     ['#SolanaatRecordHigh', 'SOLANA AT RECORD HIGH'],
     ['#WombatWalletLaunches', 'WOMBAT WALLET LAUNCHES'],
     ['#CopycatTokenScam', 'COPYCAT TOKEN SCAM'],
+    // 2026-11-17 trends.
+    ['#NvidiaBoardNotConsideringHuang’sReturnasCEO', 'NVIDIA BOARD NOT CONSIDERING HUANG’S RETURN AS CEO'],
+    ['#StrategySells2.09MMSTRSharesFor$244.7M', 'STRATEGY SELLS 2.09M MSTR SHARES FOR $244.7M'],
+    ['#AtlasProtocolUpgrade', 'ATLAS PROTOCOL UPGRADE'],
+    ['#KansasCityBank', 'KANSAS CITY BANK'],
+    ['#TONStrategyReports$23.97MQ3NetLoss', 'TON STRATEGY REPORTS $23.97M Q3 NET LOSS'],
   ])('%s', (input, expected) => {
     expect(hashtagToHeadline(input)).toBe(expected);
   });

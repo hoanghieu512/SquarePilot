@@ -5,7 +5,8 @@ import { LlmClient } from '../llm/client.js';
 import { draftAndDraw, runUpToDraft, type DraftContext } from '../pipeline.js';
 import { withdrawDraft } from '../compose/compose-draft.js';
 import { createSquareClient, resolveSquareKey, type SquareClient } from '../client/square-client.js';
-import { createZaloApi } from '../deliver/zalo-api.js';
+import { createZaloApi, type ZaloApi } from '../deliver/zalo-api.js';
+import { noPostReport } from '../deliver/run-report.js';
 import { statusOf } from '../deliver/approval-store.js';
 import { runApprovalSession } from '../deliver/approval-session.js';
 import { createSessionHandlers } from '../deliver/session-handlers.js';
@@ -14,6 +15,20 @@ import { acquireSessionLock } from '../utils/session-lock.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('run');
+
+/** The approval chat, once the config has named it; used to say why a run posted nothing. */
+let chat: { api: ZaloApi; chatId: string } | null = null;
+
+async function tell(text: string): Promise<void> {
+  if (!chat) return;
+  try {
+    await chat.api.sendMessage(chat.chatId, text);
+  } catch (err) {
+    logger.warn('Could not send the run report to Zalo', {
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 /**
  * One full run: collect, pick, draft, draw, then wait in the approval chat
@@ -31,6 +46,8 @@ async function main(): Promise<void> {
   const zalo = loadZaloConfig();
   if (!zalo.chatId) throw new ConfigError('Missing ZALO_CHAT_ID. Run `npm run zalo:setup` first.');
   const chatId = zalo.chatId;
+  const api = createZaloApi({ token: zalo.token, apiBase: zalo.apiBase });
+  chat = { api, chatId };
 
   let square: SquareClient | null = null;
   try {
@@ -66,6 +83,8 @@ async function main(): Promise<void> {
           ? 'No draft this run: no trend had both a perspective and a visual'
           : 'No draft this run: the draft failed its gates or has no card',
       );
+      // A quiet run must not look like a run that never happened.
+      await tell(noPostReport(result, now()));
       return;
     }
 
@@ -93,7 +112,7 @@ async function main(): Promise<void> {
       const summary = await runApprovalSession(
         {
           db,
-          api: createZaloApi({ token: zalo.token, apiBase: zalo.apiBase }),
+          api,
           chatId,
           now,
           square,
@@ -132,7 +151,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  logger.error(err instanceof Error ? err.message : String(err));
+main().catch(async (err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  logger.error(message);
+  await tell(`SquarePilot run failed: ${message.slice(0, 600)}`);
   process.exit(1);
 });

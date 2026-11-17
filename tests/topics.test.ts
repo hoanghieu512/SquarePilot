@@ -29,6 +29,27 @@ describe('classifyTopics', () => {
     expect(topics).toContain('claims');
   });
 
+  it('splits the hashtag the way the card headline does, so no word is glued or lost', () => {
+    // 2026-11-17: "returnas", "186websites", "2.09mmstr", "for$244.7m",
+    // "post$1.065b"; "ETFs" vanished altogether.
+    const etf = classifyTopics('#BitcoinSpotETFsPost$1.065BOutflowsForThirdStraightWeek');
+    expect(etf).toEqual(expect.arrayContaining(['bitcoin', 'etfs', 'post', 'outflows', 'price']));
+    expect(etf.some((w) => w.includes('$1.065b') && w !== '$1.065b')).toBe(false);
+
+    const mstr = classifyTopics('#StrategySells2.09MMSTRSharesFor$244.7M');
+    expect(mstr).toEqual(expect.arrayContaining(['strategy', 'mstr', 'shares', 'equities']));
+
+    expect(classifyTopics('#NvidiaBoardNotConsideringHuang’sReturnasCEO')).toEqual(
+      expect.arrayContaining(['huang', 'return', 'ceo', 'equities']),
+    );
+    expect(classifyTopics('#OPTIMJACKAttackInfectsAtLeast186Websites')).toEqual(
+      expect.arrayContaining(['optimjack', 'attack', 'websites']),
+    );
+    expect(classifyTopics('#TONStrategyReports$23.97MQ3NetLoss')).toEqual(
+      expect.arrayContaining(['reports', 'q3', 'loss', 'earnings']),
+    );
+  });
+
   it('returns only literal words when nothing in the table matches', () => {
     const topics = classifyTopics('#SomeUnrecognisableThing');
     expect(topics).toContain('unrecognisable');

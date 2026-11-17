@@ -113,6 +113,12 @@ export function hashtagToHeadline(hashtag: string): string {
     // English words ending in -and or -at (Holland, Threat, Democrat, Habitat, Wombat)
     // have a consonant or e before the function word, so they are left whole.
     .replace(/([A-Z][a-z]{2,}?[aiougn])(and|at)(?=[A-Z])/g, '$1 $2 ')
+    // "as" only after an n (Return|as, Explain|as): after other letters it ends
+    // too many words (Vegas, Atlas, Kansas).
+    .replace(/([A-Z][a-z]{2,}?n)(as)(?=[A-Z])/g, '$1 $2 ')
+    // An amount glued to a ticker: 2.09M|MSTR. A capital after K, M, B or T
+    // that starts another run of capitals is a new word, not more units.
+    .replace(/(\d[KMBT])(?=[A-Z]{2})/g, '$1 ')
     // A curly or straight apostrophe followed by a capital: Stocks’Next.
     .replace(/(['’])(?=[A-Z])/g, '$1 ');
 

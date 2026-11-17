@@ -11,6 +11,8 @@
     "zalo:setup": "tsx src/scripts/zalo-setup.ts",
     "check:image-route": "tsx src/scripts/image-route-check.ts",
     "check:approval": "tsx src/scripts/approval-check.ts",
+    "schedule": "tsx src/scripts/schedule.ts",
+    "stats": "tsx src/scripts/stats.ts",
     "lint": "eslint src tests",
     "test": "vitest run",
     "test:watch": "vitest",
