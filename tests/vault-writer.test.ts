@@ -240,9 +240,13 @@ describe('vault writer', () => {
 
 describe('postSlug and vaultDate', () => {
   it('splits camel-case hashtags into a short slug', () => {
-    expect(postSlug('#WhatWillDriveCryptoandStocks’NextRebound?')).toBe('what-will-drive-cryptoand-stocks-next');
+    expect(postSlug('#WhatWillDriveCryptoandStocks’NextRebound?')).toBe('what-will-drive-crypto-and-stocks');
     expect(postSlug('#BTCHolds')).toBe('btc-holds');
-    expect(postSlug('#TRUMPBreaksAbove$3.4')).toBe('trump-breaks-above-3-4');
+    expect(postSlug('#TRUMPBreaksAbove$3.4')).toBe('trump-breaks-above-34');
+    // 2026-11-17: the drafts folder got "bitcoin-spot-et-fs-post-1".
+    expect(postSlug('#BitcoinSpotETFsPost$1.065BOutflowsForThirdStraightWeek')).toBe(
+      'bitcoin-spot-etfs-post-1065b-outflows',
+    );
     expect(postSlug('#???')).toBe('post');
   });
 

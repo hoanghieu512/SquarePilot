@@ -18,7 +18,7 @@ describe('alignVisualToDraft', () => {
   it('keeps a card exactly as is when the draft writes the same figures', () => {
     const r = alignVisualToDraft(base, 'Price sits near $68k and 2.5% up on the month.', opts);
     // Unchanged but for the line that says what the number is.
-    expect(r).toEqual({ ok: true, schema: { ...base, focal_subline: 'Price sits near' }, changed: [] });
+    expect(r).toEqual({ ok: true, schema: { ...base, focal_subline: 'Price sits' }, changed: [] });
   });
 
   it("writes the card's figures the way the draft writes them", () => {
@@ -87,8 +87,8 @@ describe('alignVisualToDraft', () => {
       const ppi = 'Here is the print: annual came in at 6.5%, and nobody moved.';
       expect(focalCaption(ppi, fig(ppi, '6.5%'))).toBe('annual came in');
       const btc = 'It landed after $BTC had already slid below $70,000, its lowest since August.';
-      // 43 characters before the figure: the first word goes, the rest fits in 40.
-      expect(focalCaption(btc, fig(btc, '$70,000'))).toBe('landed after $BTC had already slid below');
+      // "below" led into the figure and goes; "It" with nothing before it goes too.
+      expect(focalCaption(btc, fig(btc, '$70,000'))).toBe('landed after $BTC had already slid');
     });
 
     it('takes a comparison after the figure, which reads whole under the number', () => {
@@ -98,6 +98,53 @@ describe('alignVisualToDraft', () => {
       const fell = 'Open interest is 4.2B down from 5.1B a week ago.';
       const f = extractFigures(fell, opts)[0]!;
       expect(focalCaption(fell, f)).not.toMatch(/^Open interest/);
+    });
+
+    it('takes "in <what>" after an amount, which names it', () => {
+      // 2026-11-17: "$1.065B / TAG SAYS SPOT BITCOIN ETFS POSTED".
+      const etf = 'The tag says spot Bitcoin ETFs posted $1.065B in outflows for a third straight week.';
+      expect(focalCaption(etf, fig(etf, '$1.065B'))).toBe('in outflows for a third straight week');
+      // A percent "in" a period is not what the figure is.
+      const pct = 'Volume rose 12% in a week.';
+      expect(focalCaption(pct, fig(pct, '12%'))).toBe('Volume rose');
+    });
+
+    it('never ends the words before a figure on the word that led into it, nor starts on a bare pronoun', () => {
+      // 2026-11-17, card v2: "$68K / IT TRADING BELOW THE WEEKLY 200 MA NEAR".
+      const ma = 'Another has it trading below the Weekly 200 MA near $68K.';
+      expect(focalCaption(ma, fig(ma, '$68K'))).toBe('trading below the Weekly 200 MA');
+      const close = 'One top post puts the latest weekly close at $65,351, under the 200-week average.';
+      expect(focalCaption(close, fig(close, '$65,351'))).toBe('top post puts the latest weekly close');
+      const around = 'Price is hovering around $64,000 again.';
+      expect(focalCaption(around, fig(around, '$64,000'))).toBe('Price is hovering');
+      const on = 'One top post pins a single day on $1.31B of longs.';
+      expect(focalCaption(on, fig(on, '$1.31B'))).toBe('One top post pins a single day');
+      const then = 'BTC dropped to $62,100, then recovered toward $64,000.';
+      expect(focalCaption(then, fig(then, '$64,000'))).toBe('recovered');
+      const quote = 'Another just states BTC is "heading to $180,000".';
+      expect(focalCaption(quote, fig(quote, '$180,000'))).toBe('Another just states BTC is heading');
+    });
+
+    it('drops a cited tile that is a span of time, not a quantity', () => {
+      // 2026-11-17: "CITED 200-WEEK" on the card.
+      const body = 'One top post puts the close at $65,351, under the 200-week average, near $68K.';
+      const r = alignVisualToDraft(
+        {
+          ...base,
+          focal_number: '$65,351',
+          stat_tiles: [
+            { label: 'views', value: '96.3K' },
+            { label: 'cited', value: '200-week' },
+            { label: 'cited', value: '$68K' },
+          ],
+        },
+        body,
+        opts,
+      );
+      expect(r.ok && r.schema.stat_tiles).toEqual([
+        { label: 'views', value: '96.3K' },
+        { label: 'cited', value: '$68K' },
+      ]);
     });
 
     it('drops a cited tile whose figure the caption already gives', () => {

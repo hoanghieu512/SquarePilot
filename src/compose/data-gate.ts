@@ -1,5 +1,6 @@
 import type { Trend } from '../collect/parse-trends.js';
 import type { HashtagPost } from '../collect/hashtag-reader.js';
+import { groupLongNumbers } from './post-format.js';
 
 export interface StatTile {
   label: string;
@@ -169,18 +170,50 @@ function splitWords(text: string): string {
     .replace(/\b[A-Z]{4,}\b/g, splitAcronymRun);
 }
 
+/** Words a cut headline should end before: each opens a phrase of its own. */
+const PHRASE_OPENERS = new Set(
+  'FOR IN ON AT TO OF AFTER SINCE AS WITH FROM BY AMID OVER UNDER DURING BEFORE AND OR BUT'.split(' '),
+);
+
+/** Greedy: as many whole words as fit in `cap`. */
+function fitWords(words: string[], cap: number): number {
+  let n = 0;
+  let len = 0;
+  while (n < words.length && len + (n > 0 ? 1 : 0) + words[n]!.length <= cap) {
+    len += (n > 0 ? 1 : 0) + words[n]!.length;
+    n++;
+  }
+  return n;
+}
+
+/**
+ * Two lines of at most `CAPS.headline_line`, in whole words.
+ *
+ * A hashtag longer than both lines loses its tail, cut before the last
+ * phrase that does not fit whole: "$1.065B OUTFLOWS FOR THIRD STRAIGHT WEEK"
+ * becomes "$1.065B OUTFLOWS", not "$1.065B OUTFLOWS FOR THIRD S", which is
+ * what slicing at the cap printed on 2026-11-17.
+ */
 function splitHeadline(text: string): { headline_1: string; headline_2?: string } {
-  if (text.length <= CAPS.headline_line) return { headline_1: text };
+  const cap = CAPS.headline_line;
+  if (text.length <= cap) return { headline_1: text };
 
   const words = text.split(' ');
-  let first = '';
-  let i = 0;
-  while (i < words.length && (first + ' ' + words[i]!).trim().length <= CAPS.headline_line) {
-    first = (first + ' ' + words[i]!).trim();
-    i++;
+  const n1 = Math.max(1, fitWords(words, cap));
+  const first = words.slice(0, n1).join(' ').slice(0, cap);
+  const rest = words.slice(n1);
+  if (rest.length === 0) return { headline_1: first };
+
+  let n2 = fitWords(rest, cap);
+  if (n2 === 0) return { headline_1: first, headline_2: rest[0]!.slice(0, cap) };
+  if (n2 < rest.length) {
+    // Words were dropped: end before the last phrase opener, if that leaves
+    // at least two words, so the line stops where a phrase stops.
+    const opener = rest.slice(0, n2).map((w) => PHRASE_OPENERS.has(w)).lastIndexOf(true);
+    if (opener >= 2) n2 = opener;
   }
-  const second = words.slice(i).join(' ').slice(0, CAPS.headline_line);
-  return second ? { headline_1: first, headline_2: second } : { headline_1: first };
+  while (n2 > 1 && PHRASE_OPENERS.has(rest[n2 - 1]!)) n2--;
+  return { headline_1: first, headline_2: rest.slice(0, n2).join(' ') };
 }
 
 /**
@@ -194,7 +227,8 @@ export function runDataGate(input: GateInput): DataGateResult {
   const found: string[] = [];
   const missing: string[] = [];
 
-  const headlineText = input.headline ?? hashtagToHeadline(trend.hashtag);
+  // Counts grouped as in the post: "64000" reads as "64,000" on the card.
+  const headlineText = groupLongNumbers(input.headline ?? hashtagToHeadline(trend.hashtag));
   const headline = splitHeadline(headlineText);
   if (headline.headline_1.length > 0) found.push('headline_1');
   else missing.push('headline_1');

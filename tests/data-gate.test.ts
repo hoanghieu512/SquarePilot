@@ -120,6 +120,45 @@ describe('extractNumbers', () => {
   });
 });
 
+describe('headline lines on the card', () => {
+  const lines = (hashtag: string) => {
+    const g = runDataGate({ trend: trend({ hashtag }), topPosts: [post('Up 12% on the week.')] });
+    if (!g.ok) throw new Error(g.reason);
+    return [g.available.headline_1, g.available.headline_2].filter(Boolean) as string[];
+  };
+
+  it('cuts a headline too long for two lines before a phrase, never inside a word', () => {
+    // 2026-11-17: the card read "$1.065B OUTFLOWS FOR THIRD S".
+    expect(lines('#BitcoinSpotETFsPost$1.065BOutflowsForThirdStraightWeek')).toEqual([
+      'BITCOIN SPOT ETFS POST',
+      '$1.065B OUTFLOWS',
+    ]);
+  });
+
+  it('groups long numbers, as the post does', () => {
+    expect(lines('#About64000BitcoinMiningMachinesReportedlyHijacked')).toEqual([
+      'ABOUT 64,000 BITCOIN MINING',
+      'MACHINES REPORTEDLY HIJACKED',
+    ]);
+  });
+
+  it('keeps every line within the cap and made of whole words of the hashtag', () => {
+    for (const tag of [
+      '#BitcoinSpotETFsPost$1.065BOutflowsForThirdStraightWeek',
+      '#USSpotXRPETFsSeeLargestWeeklyOutflowIn8Months',
+      '#BitgetHotWalletBreachTiedToThirdPartySecurityFlaw',
+      '#WhatWillDriveCryptoandStocks’NextRebound?',
+      '#KavaSaysAbnormalActivityLimitedToKavaLend',
+    ]) {
+      const words = new Set(hashtagToHeadline(tag).replace(/(\d),(\d)/g, '$1$2').split(' '));
+      for (const line of lines(tag)) {
+        expect(line.length, line).toBeLessThanOrEqual(CAPS.headline_line);
+        for (const w of line.replace(/(\d),(\d)/g, '$1$2').split(' ')) expect(words.has(w), `${tag}: ${w}`).toBe(true);
+      }
+    }
+  });
+});
+
 describe('runDataGate', () => {
   it('passes when the top posts supply a headline figure', () => {
     const result = runDataGate({

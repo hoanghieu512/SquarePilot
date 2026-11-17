@@ -33,9 +33,14 @@ function draftFigureFor(cardValue: string, draft: Figure[]): Figure | undefined 
 const NOT_A_SUBJECT = new Set(
   (
     'a an the and or but nor so yet while whereas as than to of in on at for from by with into onto over under ' +
-    'since after before because against versus vs which that who is was are were be been it its this these those'
+    'since after before because against versus vs which that who is was are were be been it its this these those ' +
+    // Adverbs: "$64,000 again" says nothing about what $64,000 is.
+    'again today yesterday now then already still too also ago back instead overall alone only just even recently'
   ).split(' '),
 );
+/** What a stat tile can show: a number, optionally with $, %, K/M/B/T, x or bps. */
+const TILE_VALUE = /^[+-]?\$?[\d.,]+\s?(?:%|[KMBT]|x|bps)?$/i;
+
 /** Words after a figure that set it against another: the caption takes them. */
 const COMPARISON = new Set(['against', 'versus', 'vs', 'than', 'from', 'compared']);
 /**
@@ -44,17 +49,45 @@ const COMPARISON = new Set(['against', 'versus', 'vs', 'than', 'from', 'compared
  */
 const DANGLING = new Set('a an the and or but of to at for from by with across into as than'.split(' '));
 
+/**
+ * Words that lead into a figure ("trading ... near $68K", "hovering around
+ * $64,000"). Under the number on the card they would point at nothing, so the
+ * words before a figure never end on one.
+ */
+const LEAD_IN = new Set([
+  ...DANGLING,
+  ...'near around about roughly nearly almost approximately below above under over beneath past toward towards'.split(' '),
+]);
+
+/** Words a quote taken from before a figure must not start on: a pronoun or helper verb with nothing before it. */
+const BARE_START = new Set([
+  ...DANGLING,
+  ...'it its they them their this that these those he she has have had is are was were be been being which who'.split(' '),
+  ...'then so also still just'.split(' '),
+]);
+
 function trimCaption(words: string[], cap: number, fromEnd: boolean): string | undefined {
+  const source = [...words];
+  if (fromEnd) {
+    // Drop the lead-in before counting, so it costs none of the 40 characters.
+    // "in" and "on" count only right against the figure ("pins a day on
+    // $1.31B"); further back they close a phrasal verb ("came in at 6.5%").
+    const last = source[source.length - 1]?.toLowerCase();
+    if (last === 'in' || last === 'on') source.pop();
+    while (source.length > 0 && LEAD_IN.has(source[source.length - 1]!.toLowerCase())) source.pop();
+  }
   const kept: string[] = [];
-  for (const w of fromEnd ? [...words].reverse() : words) {
+  for (const w of fromEnd ? [...source].reverse() : source) {
     const next = fromEnd ? [w, ...kept] : [...kept, w];
     if (next.join(' ').length > cap) break;
     if (fromEnd) kept.unshift(w);
     else kept.push(w);
   }
   while (kept.length > 0 && DANGLING.has(kept[kept.length - 1]!.toLowerCase())) kept.pop();
-  while (kept.length > 0 && DANGLING.has(kept[0]!.toLowerCase()) && fromEnd) kept.shift();
-  const text = kept.join(' ').replace(/[,;:.!?]+$/, '');
+  while (kept.length > 0 && BARE_START.has(kept[0]!.toLowerCase()) && fromEnd) kept.shift();
+  let text = kept.join(' ').replace(/[,;:.!?]+$/, '');
+  // A quote cut open by the clause break or the cap loses its stray mark.
+  if ((text.match(/["“”]/g) ?? []).length % 2 === 1) text = text.replace(/["“”]/g, '');
   return text.length >= 3 ? text : undefined;
 }
 
@@ -88,7 +121,13 @@ export function focalCaption(body: string, figure: Figure, cap = CAPS.focal_subl
   // "6.5% against the expected 6.6%": a comparison reads whole under the
   // number, and says more than the words before it ("annual came in").
   const comparison = COMPARISON.has(first) && afterWords.length > 1;
-  if (afterWords.length > 0 && /^[a-z]/i.test(afterWords[0]!) && (comparison || !NOT_A_SUBJECT.has(first))) {
+  // "$1.065B in outflows": after an amount, "in" names what the amount is.
+  const amountOf = first === 'in' && (figure.unit === 'currency' || figure.unit === 'plain') && afterWords.length > 1;
+  if (
+    afterWords.length > 0 &&
+    /^[a-z]/i.test(afterWords[0]!) &&
+    (comparison || amountOf || !NOT_A_SUBJECT.has(first))
+  ) {
     return trimCaption(afterWords, cap, false);
   }
   return trimCaption(beforeClause.split(/\s+/).filter(Boolean), cap, true);
@@ -155,6 +194,12 @@ export function alignVisualToDraft(
       const match = draftFigureFor(tile.value, draft);
       if (!match || match.raw.length > CAPS.stat_value) {
         changed.push(`dropped cited tile ${tile.value}: not stated in the draft`);
+        continue;
+      }
+      // A tile shows a quantity. "200-week" or "7-day" is a figure to the
+      // fact check but a span of time on a tile ("CITED 200-WEEK").
+      if (!TILE_VALUE.test(match.raw)) {
+        changed.push(`dropped cited tile ${tile.value}: not a quantity a tile can show`);
         continue;
       }
       if (match.raw === out.focal_number) {

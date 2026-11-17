@@ -156,21 +156,23 @@ export function buildCard(schema: VisualSchema, assets: CardAssets = {}): Node {
     children: schema.top_label,
   });
 
+  // One block, wrapped balanced across the width. The two schema fields cap
+  // the text at 28 characters each, but a 76 px Zodiak Black line holds about
+  // 20, so drawing each field as its own line wrapped them again and left
+  // "BITCOIN" alone above "EXTENDS LOSING" (2026-11-17). As one block the same
+  // words read "BITCOIN EXTENDS / LOSING STREAK TO / SIX WEEKS".
   const headline = el('div', {
-    style: { display: 'flex', flexDirection: 'column' },
-    children: headlines.map((line) =>
-      el('div', {
-        style: {
-          fontFamily: 'Display',
-          fontSize: 76,
-          fontWeight: 900,
-          color: PALETTE.ink,
-          lineHeight: 1.05,
-          textTransform: 'uppercase',
-        },
-        children: line,
-      }),
-    ),
+    style: {
+      display: 'flex',
+      fontFamily: 'Display',
+      fontSize: 76,
+      fontWeight: 900,
+      color: PALETTE.ink,
+      lineHeight: 1.05,
+      textTransform: 'uppercase',
+      textWrap: 'balance',
+    },
+    children: headlines.join(' '),
   });
 
   const stamp = el('div', {
@@ -219,6 +221,7 @@ export function buildCard(schema: VisualSchema, assets: CardAssets = {}): Node {
       letterSpacing: 1,
       lineHeight: 1.3,
       textTransform: 'uppercase',
+      textWrap: 'balance',
     },
     children: schema.focal_subline ?? '',
   });

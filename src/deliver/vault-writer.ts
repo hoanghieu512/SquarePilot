@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import type { VisualSchema } from '../compose/data-gate.js';
 import { DISCLAIMER, HARD_CAP_NFD, stripDisclaimer } from '../compose/text-validation.js';
 import { latestOfferedVisual } from '../visual/draft-visual.js';
+import { hashtagToHeadline } from '../compose/data-gate.js';
 import { vietnamDate } from '../compose/recent-posts.js';
 
 /**
@@ -74,13 +75,13 @@ function loadDraft(db: Database.Database, draftId: number): DraftRow {
 /** `YYYY-MM-DD` in Vietnam, the date the vault's file names use. */
 export const vaultDate = vietnamDate;
 
-/** "#WhatWillDriveCryptoandStocks’NextRebound?" → "what-will-drive-cryptoand-stocks-next". */
+/** "#BitcoinSpotETFsPost$1.065BOutflows..." → "bitcoin-spot-etfs-post-1065b-outflows". */
 export function postSlug(hashtag: string, maxWords = 6): string {
-  const words = hashtag
-    .replace(/^#/, '')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+  // The headline splitter already knows brands and glued words ("ETFs",
+  // "Cryptoand"); a figure keeps its digits together ("$1.065B" -> "1065b").
+  const words = hashtagToHeadline(hashtag)
     .toLowerCase()
+    .replace(/(\d)[.,](?=\d)/g, '$1')
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
   return words.slice(0, maxWords).join('-') || 'post';
